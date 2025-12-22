@@ -216,7 +216,9 @@ with Workflow(wait=True):
         exit(1)
 
     generated_batches = []
-    current_start_image = input_image
+
+    # so it's clear this is just the buffer from the previous step.
+    last_generated_frame = input_image
 
     current_lora_high = args.lora_high
     current_lora_low = args.lora_low
@@ -229,14 +231,33 @@ with Workflow(wait=True):
             print(f"Error: Segment {i + 1} is missing a 'prompt'. Skipping.")
             continue
 
-        # If the segment has specific loras, use them AND update the current default.
-        # If not, use the current default (which might be from previous segment).
         if "lora_high" in seg:
             current_lora_high = seg["lora_high"]
         if "lora_low" in seg:
             current_lora_low = seg["lora_low"]
 
         seg_length = seg.get("length", 81)
+
+        # 1. Determine Start Image (Defaults to last_generated_frame)
+        seg_start_image = last_generated_frame
+        if "start_image" in seg:
+            print(f"Loading explicit start image: {seg['start_image']}")
+            seg_start_image, _ = LoadImage(seg["start_image"])
+
+        # 2. Determine End Image
+        seg_end_image = None
+
+        if seg.get("use_last_frame_as_end", False):
+            print("Using last generated frame as End Image.")
+            seg_end_image = last_generated_frame
+        elif "end_image" in seg:
+            print(f"Loading explicit end image: {seg['end_image']}")
+            seg_end_image, _ = LoadImage(seg["end_image"])
+
+        if seg_end_image is not None and seg_start_image is seg_end_image:
+            print(
+                "Notice: Start Image and End Image are the same (creating a loop or static-bound video)."
+            )
 
         # Validation: Ensure we have loras for the very first segment
         if current_lora_high is None or current_lora_low is None:
@@ -250,15 +271,18 @@ with Workflow(wait=True):
             wan_low_noise_model,
             clip,
             vae,
-            start_image=current_start_image,
+            start_image=seg_start_image,
             prompt=seg_prompt,
             loras_high=current_lora_high,
             loras_low=current_lora_low,
+            end_image=seg_end_image,
             length=seg_length,
         )
 
         generated_batches.append(trimmed_batch)
-        current_start_image = selected_frame
+
+        # Update state for next iteration
+        last_generated_frame = selected_frame
 
     merge_inputs = generated_batches[:5]
     while len(merge_inputs) < 5:
