@@ -1,8 +1,10 @@
 from comfy_script.runtime import *
+import datetime
 
-runpod_proxy = "https://355jbuu2d2i91q-8188.proxy.runpod.net/"
-load("runpod_proxy")
+runpod_proxy = "https://355jbuu2dq-8188.proxy.runpod.net/"
+load(runpod_proxy)
 from comfy_script.runtime.nodes import *
+
 
 def setup_models():
     clip = CLIPLoader("umt5_xxl_fp16.safetensors", "wan", "default")
@@ -21,7 +23,6 @@ def setup_models():
         WAN_HIGH_NOISE_LIGHTNING_STRENGTH,
     )
 
-
     wan_low_noise_model = UNETLoader(
         "Wan2.2/wan2.2_i2v_low_noise_14B_fp16.safetensors", "default"
     )
@@ -31,29 +32,38 @@ def setup_models():
         WAN_LOW_NOISE_LIGHTNING_STRENGTH,
     )
 
-
     return clip, vae, wan_high_noise_model, wan_low_noise_model
 
 
-
-
-
-
-def wan_first_last_frame_to_video(model_high, model_low, clip, vae, start_image, end_image, length, prompt, loras_high, loras_low):
+def wan_first_last_frame_to_video(
+    model_high,
+    model_low,
+    clip,
+    vae,
+    start_image,
+    end_image,
+    length,
+    prompt,
+    loras_high,
+    loras_low,
+):
     steps = PrimitiveInt(8)
     cfg_high = PrimitiveFloat(1)
     cfg_low = PrimitiveFloat(1)
     start_low_at_step = PrimitiveInt(4)
 
     empty_negative_conditioning = CLIPTextEncode("", clip)
-    conditioning = CLIPTextEncode(prompt, clip,)
+    conditioning = CLIPTextEncode(
+        prompt,
+        clip,
+    )
 
     # TODO: Add check if loras is a string or a list. If list then iterate, if string then load
     for i, lora in enumerate(loras_high):
         if i == 0:
             print("First pass")
             lora_model_high = LoraLoaderModelOnly(model_high, lora, 1)
-        else:    
+        else:
             print("Additional pass")
             lora_model_high = LoraLoaderModelOnly(lora_model_high, lora, 1)
 
@@ -63,13 +73,11 @@ def wan_first_last_frame_to_video(model_high, model_low, clip, vae, start_image,
         if i == 0:
             print("First pass")
             lora_model_low = LoraLoaderModelOnly(model_low, lora, 1)
-        else:    
+        else:
             print("Additional pass")
             lora_model_low = LoraLoaderModelOnly(lora_model_low, lora, 1)
 
     lora_model_low = ModelSamplingSD3(lora_model_low, 5)
-
-
 
     width, height, _ = GetImageSize(start_image)
 
@@ -123,11 +131,7 @@ def wan_first_last_frame_to_video(model_high, model_low, clip, vae, start_image,
     return selected_frame, trimmed_batch
 
 
-
-
-
 with Workflow():
-
     clip, vae, wan_high_noise_model, wan_low_noise_model = setup_models()
     input_image, _ = LoadImage("/workspace/input/2025_12_22_094453_00009_.png")
 
@@ -138,19 +142,23 @@ with Workflow():
         vae,
         input_image,
         input_image,
-        41,
+        81,
         "The woman smiles",
         ["test_lora_high.safetensors"],
         ["test_lora_low.safetensors"],
     )
 
-
     merged = VideoMerge(trimmed_batch, None, None, None, None)
+
+    timestamp = datetime.datetime.now().strftime("%Y_%m_%d_%H%M%S")
+
+    output_filename = f"wan22_16fps/scripted/{timestamp}"
+
     output = VHSVideoCombine(
         merged,
         16,
         0,
-        "wan22_16fps/scripted/2025_12_21_272353234234223423_2",
+        output_filename,
         "video/h264-mp4",
         False,
         True,
