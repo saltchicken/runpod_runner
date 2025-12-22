@@ -70,21 +70,33 @@ def wan_first_last_frame_to_video(
         clip,
     )
 
+    if not loras_high or not loras_low:
+        #TODO: raise error
+        return
 
-    lora_model_high = model_high
-    if loras_high:
-        for lora in loras_high:
-            print(f"Loading High Noise LoRA: {lora}")
-            lora_model_high = LoraLoaderModelOnly(lora_model_high, lora, 1)
+    # NOTE: Debugging
+    print(f"High Noise LoRAs: {loras_high}")
+
+    if isinstance(loras_high, str):
+        loras_high = [loras_high]
+
+    if isinstance(loras_low, str):
+        loras_low = [loras_low]
+
+    # NOTE: This may be required because the base model (model_high) needs to remain unaltered.
+    # LoraLoadModelOnly provides a deepcopy.
+    lora_model_high = LoraLoaderModelOnly(model_high, loras_high[0], 1)
+
+    if len(lora_high) == 2:
+        lora_model_high = LoraLoaderModelOnly(lora_model_high, loras_high[1], 1)
 
     lora_model_high = ModelSamplingSD3(lora_model_high, 5)
 
 
-    lora_model_low = model_low
-    if loras_low:
-        for lora in loras_low:
-            print(f"Loading Low Noise LoRA: {lora}")
-            lora_model_low = LoraLoaderModelOnly(lora_model_low, lora, 1)
+    lora_model_low = LoraLoaderModelOnly(model_low, loras_low[0], 1)
+
+    if len(loras_low) == 2:
+        lora_model_low = LoraLoaderModelOnly(lora_model_low, loras_low[1], 1)
 
     lora_model_low = ModelSamplingSD3(lora_model_low, 5)
 
@@ -140,7 +152,7 @@ def wan_first_last_frame_to_video(
     return selected_frame, trimmed_batch
 
 
-with Workflow():
+with Workflow(wait=True):
     clip, vae, wan_high_noise_model, wan_low_noise_model = setup_models()
 
     input_image, _ = LoadImage(args.input)
@@ -177,4 +189,5 @@ with Workflow():
         None,
         None,
     )
-    output.wait()
+
+print(output)
