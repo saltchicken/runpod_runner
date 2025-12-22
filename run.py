@@ -58,24 +58,28 @@ def load_loras(model, loras):
     # LoraLoadModelOnly provides a deepcopy.
     lora_model = LoraLoaderModelOnly(model, loras[0], 1)
 
-    if len(loras) > 1:
+    if len(loras) == 2:
         lora_model = LoraLoaderModelOnly(lora_model, loras[1], 1)
+    elif len(loras) > 2:
+        print(
+            "Please note that only the first two LoRAs will be loaded. Need to implement more lora loading logic."
+        )
 
     lora_model = ModelSamplingSD3(lora_model, 5)
     return lora_model
 
 
-def wan_first_last_frame_to_video(
+def wan_frame_to_video(
     model_high,
     model_low,
     clip,
     vae,
     start_image,
-    end_image,
-    length,
     prompt,
     loras_high,
     loras_low,
+    end_image=None,
+    length=81,
 ):
     steps = PrimitiveInt(8)
     cfg_high = PrimitiveFloat(1)
@@ -100,24 +104,37 @@ def wan_first_last_frame_to_video(
 
     width, height, _ = GetImageSize(start_image)
 
-    positive, negative, latent = WanFirstLastFrameToVideo(
-        conditioning,
-        empty_negative_conditioning,
-        vae,
-        width,
-        height,
-        length,
-        1,
-        None,
-        None,
-        start_image,
-        end_image,
-    )
+    if end_image is not None:
+        positive, negative, latent = WanFirstLastFrameToVideo(
+            conditioning,
+            empty_negative_conditioning,
+            vae,
+            width,
+            height,
+            length,
+            1,
+            None,
+            None,
+            start_image,
+            end_image,
+        )
+    else:
+        positive, negative, latent = WanImageToVideo(
+            conditioning,
+            empty_negative_conditioning,
+            vae,
+            width,
+            height,
+            length,
+            1,
+            None,
+            start_image,
+        )
 
     latent = KSamplerAdvanced(
         lora_model_high,
         "enable",
-        831186949035390,
+        831186949035391,
         steps,
         cfg_high,
         "euler",
@@ -155,17 +172,17 @@ with Workflow(wait=True):
 
     input_image, _ = LoadImage(args.input)
 
-    selected_frame, trimmed_batch = wan_first_last_frame_to_video(
+    selected_frame, trimmed_batch = wan_frame_to_video(
         wan_high_noise_model,
         wan_low_noise_model,
         clip,
         vae,
         input_image,
-        input_image,
-        81,
         args.prompt,
         args.lora_high,
         args.lora_low,
+        end_image=input_image,
+        length=81,
     )
 
     merged = VideoMerge(trimmed_batch, None, None, None, None)
@@ -188,3 +205,4 @@ with Workflow(wait=True):
     )
 
 print(output)
+
