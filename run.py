@@ -1,4 +1,6 @@
 import argparse
+import json
+import os
 from comfy_script.runtime import *
 import datetime
 
@@ -7,23 +9,25 @@ parser = argparse.ArgumentParser(description="Wan2.2 Video Generation Script")
 
 parser.add_argument("--proxy", type=str, required=True, help="RunPod proxy URL")
 parser.add_argument("--input", type=str, required=True, help="Path to input image")
-parser.add_argument("--prompt", type=str, required=True, help="Text prompt")
+
+
+parser.add_argument("--prompt", type=str, help="Text prompt (optional if in JSON)")
 parser.add_argument(
-    "--lora-high", nargs="*", required=True, help="List of high noise LoRAs"
+    "--lora-high", nargs="*", help="List of high noise LoRAs (optional if in JSON)"
 )
 parser.add_argument(
-    "--lora-low", nargs="*", required=True, help="List of low noise LoRAs"
+    "--lora-low", nargs="*", help="List of low noise LoRAs (optional if in JSON)"
+)
+parser.add_argument(
+    "--length", type=int, default=81, help="Length for the first instance"
 )
 
-parser.add_argument("--prompt2", type=str, help="Text prompt for the second instance")
+
 parser.add_argument(
-    "--lora-high2", nargs="*", help="List of high noise LoRAs for the second instance"
-)
-parser.add_argument(
-    "--lora-low2", nargs="*", help="List of low noise LoRAs for the second instance"
-)
-parser.add_argument(
-    "--length2", type=int, default=81, help="Length for the second instance"
+    "--segments-json",
+    type=str,
+    help="JSON string or path to JSON file containing the list of segments. "
+    "Can replace CLI prompt/lora arguments completely.",
 )
 
 args = parser.parse_args()
@@ -67,6 +71,9 @@ def load_loras(model, loras):
 
     # NOTE: This may be required because the base model (model_high) needs to remain unaltered.
     # LoraLoadModelOnly provides a deepcopy.
+    if not loras:
+        return ModelSamplingSD3(model, 5)
+
     lora_model = LoraLoaderModelOnly(model, loras[0], 1)
 
     if len(loras) == 2:
@@ -103,11 +110,8 @@ def wan_frame_to_video(
         clip,
     )
 
-    if not loras_high or not loras_low:
-        # TODO: raise error
-        return
-
     # NOTE: Debugging
+    print(f"Generating segment with Prompt: '{prompt}'")
     print(f"High Noise LoRAs: {loras_high}")
 
     lora_model_high = load_loras(model_high, loras_high)
@@ -183,58 +187,102 @@ with Workflow(wait=True):
 
     input_image, _ = LoadImage(args.input)
 
-    selected_frame, trimmed_batch = wan_frame_to_video(
-        wan_high_noise_model,
-        wan_low_noise_model,
-        clip,
-        vae,
-        input_image,
-        args.prompt,
-        args.lora_high,
-        args.lora_low,
-        # end_image=input_image,
-        length=81,
-    )
+    segments_to_process = []
 
-    if args.prompt2:
-        print("Generating second video segment...")
+    if args.segments_json:
+        try:
+            if os.path.isfile(args.segments_json):
+                with open(args.segments_json, "r") as f:
+                    segments_to_process = json.load(f)
+            else:
+                segments_to_process = json.loads(args.segments_json)
+        except json.JSONDecodeError as e:
+            print(f"Error parsing JSON for segments: {e}")
+            exit(1)
 
-        # Use provided parameters or fallback to the first instance's parameters
-        next_lora_high = args.lora_high2 if args.lora_high2 else args.lora_high
-        next_lora_low = args.lora_low2 if args.lora_low2 else args.lora_low
+    elif args.prompt:
+        segments_to_process = [
+            {
+                "prompt": args.prompt,
+                "lora_high": args.lora_high,
+                "lora_low": args.lora_low,
+                "length": args.length,
+            }
+        ]
+    else:
+        print(
+            "Error: You must provide either --segments-json OR (--prompt, --lora-high, --lora-low)"
+        )
+        exit(1)
 
-        # Feed selected_frame (last frame of first batch) as start_image for next batch
-        selected_frame_2, trimmed_batch_2 = wan_frame_to_video(
+    generated_batches = []
+    current_start_image = input_image
+
+    current_lora_high = args.lora_high
+    current_lora_low = args.lora_low
+
+    for i, seg in enumerate(segments_to_process):
+        print(f"\n--- Processing Segment {i + 1}/{len(segments_to_process)} ---")
+
+        seg_prompt = seg.get("prompt")
+        if not seg_prompt:
+            print(f"Error: Segment {i + 1} is missing a 'prompt'. Skipping.")
+            continue
+
+        # If the segment has specific loras, use them AND update the current default.
+        # If not, use the current default (which might be from previous segment).
+        if "lora_high" in seg:
+            current_lora_high = seg["lora_high"]
+        if "lora_low" in seg:
+            current_lora_low = seg["lora_low"]
+
+        seg_length = seg.get("length", 81)
+
+        # Validation: Ensure we have loras for the very first segment
+        if current_lora_high is None or current_lora_low is None:
+            print(
+                f"Error: Segment {i + 1} needs lora-high/low defined (none inherited from CLI or previous)."
+            )
+            exit(1)
+
+        selected_frame, trimmed_batch = wan_frame_to_video(
             wan_high_noise_model,
             wan_low_noise_model,
             clip,
             vae,
-            start_image=selected_frame,
-            prompt=args.prompt2,
-            loras_high=next_lora_high,
-            loras_low=next_lora_low,
-            length=args.length2,
+            start_image=current_start_image,
+            prompt=seg_prompt,
+            loras_high=current_lora_high,
+            loras_low=current_lora_low,
+            length=seg_length,
         )
 
-        merged = VideoMerge(trimmed_batch, trimmed_batch_2, None, None, None)
+        generated_batches.append(trimmed_batch)
+        current_start_image = selected_frame
+
+    merge_inputs = generated_batches[:5]
+    while len(merge_inputs) < 5:
+        merge_inputs.append(None)
+
+    if len(generated_batches) > 0:
+        merged = VideoMerge(*merge_inputs)
+
+        timestamp = datetime.datetime.now().strftime("%Y_%m_%d_%H%M%S")
+        output_filename = f"wan22_16fps/scripted/{timestamp}"
+
+        output = VHSVideoCombine(
+            merged,
+            16,
+            0,
+            output_filename,
+            "video/h264-mp4",
+            False,
+            True,
+            None,
+            None,
+            None,
+        )
+        print(output)
     else:
-        merged = VideoMerge(trimmed_batch, None, None, None, None)
+        print("No video generated.")
 
-    timestamp = datetime.datetime.now().strftime("%Y_%m_%d_%H%M%S")
-
-    output_filename = f"wan22_16fps/scripted/{timestamp}"
-
-    output = VHSVideoCombine(
-        merged,
-        16,
-        0,
-        output_filename,
-        "video/h264-mp4",
-        False,
-        True,
-        None,
-        None,
-        None,
-    )
-
-print(output)
