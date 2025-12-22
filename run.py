@@ -1,5 +1,4 @@
 import argparse
-import sys
 from comfy_script.runtime import *
 import datetime
 
@@ -9,8 +8,12 @@ parser = argparse.ArgumentParser(description="Wan2.2 Video Generation Script")
 parser.add_argument("--proxy", type=str, required=True, help="RunPod proxy URL")
 parser.add_argument("--input", type=str, required=True, help="Path to input image")
 parser.add_argument("--prompt", type=str, required=True, help="Text prompt")
-parser.add_argument("--lora-high", nargs="*", required=True, help="List of high noise LoRAs")
-parser.add_argument("--lora-low", nargs="*", required=True, help="List of low noise LoRAs")
+parser.add_argument(
+    "--lora-high", nargs="*", required=True, help="List of high noise LoRAs"
+)
+parser.add_argument(
+    "--lora-low", nargs="*", required=True, help="List of low noise LoRAs"
+)
 
 args = parser.parse_args()
 
@@ -47,6 +50,21 @@ def setup_models():
     return clip, vae, wan_high_noise_model, wan_low_noise_model
 
 
+def load_loras(model, loras):
+    if isinstance(loras, str):
+        loras = [loras]
+
+    # NOTE: This may be required because the base model (model_high) needs to remain unaltered.
+    # LoraLoadModelOnly provides a deepcopy.
+    lora_model = LoraLoaderModelOnly(model, loras[0], 1)
+
+    if len(loras) > 1:
+        lora_model = LoraLoaderModelOnly(lora_model, loras[1], 1)
+
+    lora_model = ModelSamplingSD3(lora_model, 5)
+    return lora_model
+
+
 def wan_first_last_frame_to_video(
     model_high,
     model_low,
@@ -71,34 +89,14 @@ def wan_first_last_frame_to_video(
     )
 
     if not loras_high or not loras_low:
-        #TODO: raise error
+        # TODO: raise error
         return
 
     # NOTE: Debugging
     print(f"High Noise LoRAs: {loras_high}")
 
-    if isinstance(loras_high, str):
-        loras_high = [loras_high]
-
-    if isinstance(loras_low, str):
-        loras_low = [loras_low]
-
-    # NOTE: This may be required because the base model (model_high) needs to remain unaltered.
-    # LoraLoadModelOnly provides a deepcopy.
-    lora_model_high = LoraLoaderModelOnly(model_high, loras_high[0], 1)
-
-    if len(lora_high) == 2:
-        lora_model_high = LoraLoaderModelOnly(lora_model_high, loras_high[1], 1)
-
-    lora_model_high = ModelSamplingSD3(lora_model_high, 5)
-
-
-    lora_model_low = LoraLoaderModelOnly(model_low, loras_low[0], 1)
-
-    if len(loras_low) == 2:
-        lora_model_low = LoraLoaderModelOnly(lora_model_low, loras_low[1], 1)
-
-    lora_model_low = ModelSamplingSD3(lora_model_low, 5)
+    lora_model_high = load_loras(model_high, loras_high)
+    lora_model_low = load_loras(model_low, loras_low)
 
     width, height, _ = GetImageSize(start_image)
 
@@ -156,7 +154,6 @@ with Workflow(wait=True):
     clip, vae, wan_high_noise_model, wan_low_noise_model = setup_models()
 
     input_image, _ = LoadImage(args.input)
-
 
     selected_frame, trimmed_batch = wan_first_last_frame_to_video(
         wan_high_noise_model,
