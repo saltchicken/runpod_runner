@@ -1,8 +1,20 @@
+import argparse
+import sys
 from comfy_script.runtime import *
 import datetime
 
-runpod_proxy = "https://355jbuu2dq-8188.proxy.runpod.net/"
-load(runpod_proxy)
+
+parser = argparse.ArgumentParser(description="Wan2.2 Video Generation Script")
+
+parser.add_argument("--proxy", type=str, required=True, help="RunPod proxy URL")
+parser.add_argument("--input", type=str, required=True, help="Path to input image")
+parser.add_argument("--prompt", type=str, required=True, help="Text prompt")
+parser.add_argument("--lora-high", nargs="*", required=True, help="List of high noise LoRAs")
+parser.add_argument("--lora-low", nargs="*", required=True, help="List of low noise LoRAs")
+
+args = parser.parse_args()
+
+load(args.proxy)
 from comfy_script.runtime.nodes import *
 
 
@@ -58,23 +70,20 @@ def wan_first_last_frame_to_video(
         clip,
     )
 
-    # TODO: Add check if loras is a string or a list. If list then iterate, if string then load
-    for i, lora in enumerate(loras_high):
-        if i == 0:
-            print("First pass")
-            lora_model_high = LoraLoaderModelOnly(model_high, lora, 1)
-        else:
-            print("Additional pass")
+
+    lora_model_high = model_high
+    if loras_high:
+        for lora in loras_high:
+            print(f"Loading High Noise LoRA: {lora}")
             lora_model_high = LoraLoaderModelOnly(lora_model_high, lora, 1)
 
     lora_model_high = ModelSamplingSD3(lora_model_high, 5)
 
-    for i, lora in enumerate(loras_low):
-        if i == 0:
-            print("First pass")
-            lora_model_low = LoraLoaderModelOnly(model_low, lora, 1)
-        else:
-            print("Additional pass")
+
+    lora_model_low = model_low
+    if loras_low:
+        for lora in loras_low:
+            print(f"Loading Low Noise LoRA: {lora}")
             lora_model_low = LoraLoaderModelOnly(lora_model_low, lora, 1)
 
     lora_model_low = ModelSamplingSD3(lora_model_low, 5)
@@ -133,7 +142,9 @@ def wan_first_last_frame_to_video(
 
 with Workflow():
     clip, vae, wan_high_noise_model, wan_low_noise_model = setup_models()
-    input_image, _ = LoadImage("/workspace/input/2025_12_22_094453_00009_.png")
+
+    input_image, _ = LoadImage(args.input)
+
 
     selected_frame, trimmed_batch = wan_first_last_frame_to_video(
         wan_high_noise_model,
@@ -143,9 +154,9 @@ with Workflow():
         input_image,
         input_image,
         81,
-        "The woman smiles",
-        ["test_lora_high.safetensors"],
-        ["test_lora_low.safetensors"],
+        args.prompt,
+        args.lora_high,
+        args.lora_low,
     )
 
     merged = VideoMerge(trimmed_batch, None, None, None, None)
