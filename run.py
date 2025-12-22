@@ -189,6 +189,7 @@ with Workflow(wait=True):
 
     segments_to_process = []
 
+
     if args.segments_json:
         try:
             if os.path.isfile(args.segments_json):
@@ -199,7 +200,6 @@ with Workflow(wait=True):
         except json.JSONDecodeError as e:
             print(f"Error parsing JSON for segments: {e}")
             exit(1)
-
     elif args.prompt:
         segments_to_process = [
             {
@@ -217,11 +217,13 @@ with Workflow(wait=True):
 
     generated_batches = []
 
-    # so it's clear this is just the buffer from the previous step.
+
     last_generated_frame = input_image
+
 
     current_lora_high = args.lora_high
     current_lora_low = args.lora_low
+
 
     for i, seg in enumerate(segments_to_process):
         print(f"\n--- Processing Segment {i + 1}/{len(segments_to_process)} ---")
@@ -231,6 +233,7 @@ with Workflow(wait=True):
             print(f"Error: Segment {i + 1} is missing a 'prompt'. Skipping.")
             continue
 
+
         if "lora_high" in seg:
             current_lora_high = seg["lora_high"]
         if "lora_low" in seg:
@@ -238,32 +241,70 @@ with Workflow(wait=True):
 
         seg_length = seg.get("length", 81)
 
-        # 1. Determine Start Image (Defaults to last_generated_frame)
+        # ----------------------------------------------------------------
+
+        # Priority: start_from_segment > start_image > last_generated_frame
+        # ----------------------------------------------------------------
         seg_start_image = last_generated_frame
-        if "start_image" in seg:
+
+        if "start_from_segment" in seg:
+            target_idx = seg["start_from_segment"]
+            target_nth = seg.get("start_nth_last", 1)
+
+            if target_idx < len(generated_batches):
+                print(
+                    f"Extracting Start Image: Segment {target_idx}, {target_nth}th last frame."
+                )
+                # NthLastFrameSelector returns (selected_frame, trimmed_batch)
+                seg_start_image, _ = NthLastFrameSelector(
+                    generated_batches[target_idx], target_nth
+                )
+            else:
+                print(
+                    f"Error: start_from_segment index {target_idx} does not exist yet."
+                )
+                exit(1)
+
+        elif "start_image" in seg:
             print(f"Loading explicit start image: {seg['start_image']}")
             seg_start_image, _ = LoadImage(seg["start_image"])
 
-        # 2. Determine End Image
+        # ----------------------------------------------------------------
+
+        # Priority: end_from_segment > use_last_frame_as_end > end_image > None
+        # ----------------------------------------------------------------
         seg_end_image = None
 
-        if seg.get("use_last_frame_as_end", False):
+        if "end_from_segment" in seg:
+            target_idx = seg["end_from_segment"]
+            target_nth = seg.get("end_nth_last", 1)
+
+            if target_idx < len(generated_batches):
+                print(
+                    f"Extracting End Image: Segment {target_idx}, {target_nth}th last frame."
+                )
+                seg_end_image, _ = NthLastFrameSelector(
+                    generated_batches[target_idx], target_nth
+                )
+            else:
+                print(f"Error: end_from_segment index {target_idx} does not exist yet.")
+                exit(1)
+
+        elif seg.get("use_last_frame_as_end", False):
             print("Using last generated frame as End Image.")
             seg_end_image = last_generated_frame
+
         elif "end_image" in seg:
             print(f"Loading explicit end image: {seg['end_image']}")
             seg_end_image, _ = LoadImage(seg["end_image"])
 
-        if seg_end_image is not None and seg_start_image is seg_end_image:
-            print(
-                "Notice: Start Image and End Image are the same (creating a loop or static-bound video)."
-            )
 
-        # Validation: Ensure we have loras for the very first segment
+        if seg_end_image is not None and seg_start_image is seg_end_image:
+            print("Notice: Start Image and End Image are the same (creating a loop).")
+
+        # Validation: Ensure loras exist
         if current_lora_high is None or current_lora_low is None:
-            print(
-                f"Error: Segment {i + 1} needs lora-high/low defined (none inherited from CLI or previous)."
-            )
+            print(f"Error: Segment {i + 1} needs lora-high/low defined.")
             exit(1)
 
         selected_frame, trimmed_batch = wan_frame_to_video(
@@ -280,9 +321,8 @@ with Workflow(wait=True):
         )
 
         generated_batches.append(trimmed_batch)
-
-        # Update state for next iteration
         last_generated_frame = selected_frame
+
 
     merge_inputs = generated_batches[:5]
     while len(merge_inputs) < 5:
@@ -309,4 +349,3 @@ with Workflow(wait=True):
         print(output)
     else:
         print("No video generated.")
-
