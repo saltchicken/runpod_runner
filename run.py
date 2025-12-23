@@ -2,33 +2,31 @@ import argparse
 import json
 import os
 import random
-import subprocess
 from comfy_script.runtime import *
 import datetime
-
+import subprocess
 
 parser = argparse.ArgumentParser(description="Wan2.2 Video Generation Script")
 
 parser.add_argument("--proxy", type=str, required=True, help="RunPod proxy URL")
-parser.add_argument("--input", type=str, required=True, help="Path to input image")
+parser.add_argument(
+    "--input",
+    type=str,
+    required=True,
+    help="Local path to image, or remote path if already uploaded",
+)
 
 parser.add_argument(
     "--ssh-target", type=str, help="SSH user@host (e.g., root@123.456.78.9)"
 )
-parser.add_argument(
-    "--ssh-port",
-    type=str,
-    default="22",
-    help="SSH port (RunPod usually maps this, e.g., 10045)",
-)
-parser.add_argument("--ssh-key", type=str, help="Path to private SSH key (optional)")
+parser.add_argument("--ssh-port", type=str, default="22", help="SSH port")
+parser.add_argument("--ssh-key", type=str, help="Path to private SSH key")
 parser.add_argument(
     "--output-dir",
     type=str,
     default="./output",
     help="Local directory to save the video",
 )
-
 
 parser.add_argument("--prompt", type=str, help="Text prompt (optional if in JSON)")
 parser.add_argument(
@@ -40,16 +38,49 @@ parser.add_argument(
 parser.add_argument(
     "--length", type=int, default=81, help="Length for the first instance"
 )
-
-
 parser.add_argument(
     "--segments-json",
     type=str,
-    help="JSON string or path to JSON file containing the list of segments. "
-    "Can replace CLI prompt/lora arguments completely.",
+    help="JSON string or path to JSON file containing the list of segments.",
 )
 
 args = parser.parse_args()
+
+# ‼️ START NEW UPLOAD LOGIC ‼️
+# Determine if input is local or remote
+remote_input_path = args.input
+
+if os.path.exists(args.input):
+    print(f"--- Detected local input file: {args.input} ---")
+    if not args.ssh_target:
+        print("Error: Local file found, but no --ssh-target provided to upload it.")
+        exit(1)
+
+    filename = os.path.basename(args.input)
+    # The target directory on the remote server as defined in your prompt
+    remote_dir = "/workspace/input"
+    remote_input_path = f"{remote_dir}/{filename}"
+
+    print(f"Uploading to {args.ssh_target}:{remote_input_path}...")
+
+    scp_upload_cmd = ["scp", "-P", args.ssh_port]
+    if args.ssh_key:
+        scp_upload_cmd.extend(["-i", args.ssh_key])
+        scp_upload_cmd.extend(["-o", "StrictHostKeyChecking=no"])
+
+    # Upload source -> destination
+    scp_upload_cmd.append(args.input)
+    scp_upload_cmd.append(f"{args.ssh_target}:{remote_dir}/")
+
+    try:
+        subprocess.run(scp_upload_cmd, check=True)
+        print("✅ Upload complete.")
+    except subprocess.CalledProcessError as e:
+        print(f"❌ Upload failed with error code {e.returncode}")
+        exit(1)
+else:
+    print(f"Input not found locally, assuming remote path: {args.input}")
+# ‼️ END NEW UPLOAD LOGIC ‼️
 
 load(args.proxy)
 from comfy_script.runtime.nodes import *
@@ -60,7 +91,6 @@ def setup_models():
     vae = VAELoader("wan_2.1_vae.safetensors")
 
     WAN_HIGH_NOISE_LIGHTNING_STRENGTH = 3.0
-
     WAN_LOW_NOISE_LIGHTNING_STRENGTH = 1.5
 
     wan_high_noise_model = UNETLoader(
@@ -88,8 +118,6 @@ def load_loras(model, loras):
     if isinstance(loras, str):
         loras = [loras]
 
-    # NOTE: This may be required because the base model (model_high) needs to remain unaltered.
-    # LoraLoadModelOnly provides a deepcopy.
     if not loras:
         return ModelSamplingSD3(model, 5)
 
@@ -98,9 +126,7 @@ def load_loras(model, loras):
     if len(loras) == 2:
         lora_model = LoraLoaderModelOnly(lora_model, loras[1], 1)
     elif len(loras) > 2:
-        print(
-            "Please note that only the first two LoRAs will be loaded. Need to implement more lora loading logic."
-        )
+        print("Note: Only first two LoRAs loaded.")
 
     lora_model = ModelSamplingSD3(lora_model, 5)
     return lora_model
@@ -129,12 +155,8 @@ def wan_frame_to_video(
         seed = random.randint(0, 0xFFFFFFFFFFFFFF)
 
     empty_negative_conditioning = CLIPTextEncode("", clip)
-    conditioning = CLIPTextEncode(
-        prompt,
-        clip,
-    )
+    conditioning = CLIPTextEncode(prompt, clip)
 
-    # NOTE: Debugging
     print(f"Generating segment with Prompt: '{prompt}'")
     print(f"High Noise LoRAs: {loras_high}")
     print(f"Seed: {seed}")
@@ -203,7 +225,6 @@ def wan_frame_to_video(
     )
 
     segment1 = VAEDecode(latent, vae)
-
     selected_frame, trimmed_batch = NthLastFrameSelector(segment1, nth_last_frame)
     return selected_frame, trimmed_batch
 
@@ -211,7 +232,9 @@ def wan_frame_to_video(
 with Workflow() as wf:
     clip, vae, wan_high_noise_model, wan_low_noise_model = setup_models()
 
-    input_image, _ = LoadImage(args.input)
+    # ‼️ UPDATED TO USE remote_input_path ‼️
+    # If uploaded, this now points to /workspace/input/filename.png
+    input_image, _ = LoadImage(remote_input_path)
 
     segments_to_process = []
 
@@ -223,7 +246,7 @@ with Workflow() as wf:
             else:
                 segments_to_process = json.loads(args.segments_json)
         except json.JSONDecodeError as e:
-            print(f"Error parsing JSON for segments: {e}")
+            print(f"Error parsing JSON: {e}")
             exit(1)
     elif args.prompt:
         segments_to_process = [
@@ -235,15 +258,11 @@ with Workflow() as wf:
             }
         ]
     else:
-        print(
-            "Error: You must provide either --segments-json OR (--prompt, --lora-high, --lora-low)"
-        )
+        print("Error: Provide --segments-json OR CLI args.")
         exit(1)
 
     generated_batches = []
-
     last_generated_frame = input_image
-
     current_lora_high = args.lora_high
     current_lora_low = args.lora_low
 
@@ -252,7 +271,7 @@ with Workflow() as wf:
 
         seg_prompt = seg.get("prompt")
         if not seg_prompt:
-            print(f"Error: Segment {i + 1} is missing a 'prompt'. Skipping.")
+            print(f"Skipping segment {i + 1} (no prompt).")
             continue
 
         if "lora_high" in seg:
@@ -264,69 +283,45 @@ with Workflow() as wf:
         seg_seed = seg.get("seed")
         seg_nth_last_frame = seg.get("nth_last_frame", 1)
 
-        # ----------------------------------------------------------------
-
-        # Priority: start_from_segment > start_image > last_generated_frame
-        # ----------------------------------------------------------------
+        # Start Image Logic
         seg_start_image = last_generated_frame
-
         if "start_from_segment" in seg:
             target_idx = seg["start_from_segment"]
             target_nth = seg.get("start_nth_last", 1)
-
             if target_idx < len(generated_batches):
-                print(
-                    f"Extracting Start Image: Segment {target_idx}, {target_nth}th last frame."
-                )
-                # NthLastFrameSelector returns (selected_frame, trimmed_batch)
+                print(f"Start Image: Segment {target_idx}, {target_nth}th last frame.")
                 seg_start_image, _ = NthLastFrameSelector(
                     generated_batches[target_idx], target_nth
                 )
             else:
-                print(
-                    f"Error: start_from_segment index {target_idx} does not exist yet."
-                )
+                print(f"Error: start_from_segment {target_idx} invalid.")
                 exit(1)
-
         elif "start_image" in seg:
             print(f"Loading explicit start image: {seg['start_image']}")
             seg_start_image, _ = LoadImage(seg["start_image"])
 
-        # ----------------------------------------------------------------
-
-        # Priority: end_from_segment > use_last_frame_as_end > end_image > None
-        # ----------------------------------------------------------------
+        # End Image Logic
         seg_end_image = None
-
         if "end_from_segment" in seg:
             target_idx = seg["end_from_segment"]
             target_nth = seg.get("end_nth_last", 1)
-
             if target_idx < len(generated_batches):
-                print(
-                    f"Extracting End Image: Segment {target_idx}, {target_nth}th last frame."
-                )
+                print(f"End Image: Segment {target_idx}, {target_nth}th last frame.")
                 seg_end_image, _ = NthLastFrameSelector(
                     generated_batches[target_idx], target_nth
                 )
             else:
-                print(f"Error: end_from_segment index {target_idx} does not exist yet.")
+                print(f"Error: end_from_segment {target_idx} invalid.")
                 exit(1)
-
         elif seg.get("use_last_frame_as_end", False):
             print("Using last generated frame as End Image.")
             seg_end_image = last_generated_frame
-
         elif "end_image" in seg:
             print(f"Loading explicit end image: {seg['end_image']}")
             seg_end_image, _ = LoadImage(seg["end_image"])
 
-        if seg_end_image is not None and seg_start_image is seg_end_image:
-            print("Notice: Start Image and End Image are the same (creating a loop).")
-
-        # Validation: Ensure loras exist
         if current_lora_high is None or current_lora_low is None:
-            print(f"Error: Segment {i + 1} needs lora-high/low defined.")
+            print(f"Error: Segment {i + 1} missing loras.")
             exit(1)
 
         selected_frame, trimmed_batch = wan_frame_to_video(
@@ -353,7 +348,6 @@ with Workflow() as wf:
 
     if len(generated_batches) > 0:
         merged = VideoMerge(*merge_inputs)
-
         timestamp = datetime.datetime.now().strftime("%Y_%m_%d_%H%M%S")
         output_filename = f"wan22_16fps/scripted/{timestamp}"
 
@@ -369,45 +363,34 @@ with Workflow() as wf:
             None,
             None,
         )
-        # print(output)
     else:
         print("No video generated.")
+
 result = wf.task.wait()
 output_path = result[0]._output["gifs"][0]["fullpath"]
-# print(f"runpodctl send {output_path}")
+
+# ‼️ SCP RETRIEVAL LOGIC ‼️
 if args.ssh_target:
     print(f"\n--- Retrieving video from {args.ssh_target} ---")
-
-    # Create output directory if it doesn't exist
     if not os.path.exists(args.output_dir):
         os.makedirs(args.output_dir)
 
-    # Determine local filename
     filename = os.path.basename(output_path)
     local_path = os.path.join(args.output_dir, filename)
 
-    # Construct SCP command
-    # Usage: scp -P <port> -i <key> <user>@<host>:<remote_path> <local_path>
     scp_cmd = ["scp", "-P", args.ssh_port]
-
-    # Add identity file if provided
     if args.ssh_key:
         scp_cmd.extend(["-i", args.ssh_key])
-        # Disable StrictHostKeyChecking for automation if using custom keys to avoid yes/no prompt
         scp_cmd.extend(["-o", "StrictHostKeyChecking=no"])
 
-    # Add source and destination
     scp_cmd.append(f"{args.ssh_target}:{output_path}")
     scp_cmd.append(local_path)
 
     print(f"Executing: {' '.join(scp_cmd)}")
-
     try:
         subprocess.run(scp_cmd, check=True)
         print(f"✅ Video successfully downloaded to: {local_path}")
     except subprocess.CalledProcessError as e:
         print(f"❌ SCP failed with error code {e.returncode}")
-        print("Ensure your SSH keys are set up and the path exists on the remote.")
 else:
     print(f"Done. File is at (remote): {output_path}")
-    print("Pass --ssh-target 'root@<ip>' to automatically download.")
