@@ -188,7 +188,7 @@ def wan_frame_to_video(
     return selected_frame, trimmed_batch
 
 
-with Workflow(wait=True):
+with Workflow() as wf:
     clip, vae, wan_high_noise_model, wan_low_noise_model = setup_models()
 
     input_image, _ = LoadImage(args.input)
@@ -350,3 +350,6 @@ with Workflow(wait=True):
         # print(output)
     else:
         print("No video generated.")
+result = wf.task.wait()
+output_path = result[0]._output["gifs"][0]["fullpath"]
+print(f"runpodctl send {output_path}")
