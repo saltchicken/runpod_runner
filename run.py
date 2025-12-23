@@ -5,6 +5,7 @@ import random
 from comfy_script.runtime import *
 import datetime
 import subprocess
+import time
 
 parser = argparse.ArgumentParser(description="Wan2.2 Video Generation Script")
 
@@ -229,6 +230,8 @@ def wan_frame_to_video(
     return selected_frame, trimmed_batch
 
 
+output = None
+
 with Workflow() as wf:
     clip, vae, wan_high_noise_model, wan_low_noise_model = setup_models()
 
@@ -366,31 +369,53 @@ with Workflow() as wf:
     else:
         print("No video generated.")
 
-result = wf.task.wait()
-output_path = result[0]._output["gifs"][0]["fullpath"]
+if output is not None:
+    print("Waiting for VHSVideoCombine output...")
+    # ‼️ Calling .wait() directly on the node usually ensures the UI result is retrieved
+    # and fixes the None issue often seen with wf.task.wait() race conditions
+    result = output.wait()
 
-# ‼️ SCP RETRIEVAL LOGIC ‼️
-if args.ssh_target:
-    print(f"\n--- Retrieving video from {args.ssh_target} ---")
-    if not os.path.exists(args.output_dir):
-        os.makedirs(args.output_dir)
+    output_path = None
 
-    filename = os.path.basename(output_path)
-    local_path = os.path.join(args.output_dir, filename)
+    # ‼️ Handle potential return types. output.wait() often returns the dictionary directly
+    if isinstance(result, dict) and "gifs" in result:
+        output_path = result["gifs"][0]["fullpath"]
+    elif (
+        hasattr(result, "_output")
+        and result._output is not None
+        and "gifs" in result._output
+    ):
+        output_path = result._output["gifs"][0]["fullpath"]
+    elif isinstance(result, list) and len(result) > 0 and hasattr(result[0], "_output"):
+        # Fallback for old style List[Result]
+        output_path = result[0]._output["gifs"][0]["fullpath"]
 
-    scp_cmd = ["scp", "-P", args.ssh_port]
-    if args.ssh_key:
-        scp_cmd.extend(["-i", args.ssh_key])
-        scp_cmd.extend(["-o", "StrictHostKeyChecking=no"])
+    if output_path:
+        if args.ssh_target:
+            print(f"\n--- Retrieving video from {args.ssh_target} ---")
+            if not os.path.exists(args.output_dir):
+                os.makedirs(args.output_dir)
 
-    scp_cmd.append(f"{args.ssh_target}:{output_path}")
-    scp_cmd.append(local_path)
+            filename = os.path.basename(output_path)
+            local_path = os.path.join(args.output_dir, filename)
 
-    print(f"Executing: {' '.join(scp_cmd)}")
-    try:
-        subprocess.run(scp_cmd, check=True)
-        print(f"✅ Video successfully downloaded to: {local_path}")
-    except subprocess.CalledProcessError as e:
-        print(f"❌ SCP failed with error code {e.returncode}")
+            scp_cmd = ["scp", "-P", args.ssh_port]
+            if args.ssh_key:
+                scp_cmd.extend(["-i", args.ssh_key])
+                scp_cmd.extend(["-o", "StrictHostKeyChecking=no"])
+
+            scp_cmd.append(f"{args.ssh_target}:{output_path}")
+            scp_cmd.append(local_path)
+
+            print(f"Executing: {' '.join(scp_cmd)}")
+            try:
+                subprocess.run(scp_cmd, check=True)
+                print(f"✅ Video successfully downloaded to: {local_path}")
+            except subprocess.CalledProcessError as e:
+                print(f"❌ SCP failed with error code {e.returncode}")
+        else:
+            print(f"Done. File is at (remote): {output_path}")
+    else:
+        print(f"❌ Could not extract output path. Result was: {result}")
 else:
-    print(f"Done. File is at (remote): {output_path}")
+    print("No output node to wait on.")
