@@ -2,6 +2,7 @@ import argparse
 import json
 import os
 import random
+import subprocess
 from comfy_script.runtime import *
 import datetime
 
@@ -10,6 +11,23 @@ parser = argparse.ArgumentParser(description="Wan2.2 Video Generation Script")
 
 parser.add_argument("--proxy", type=str, required=True, help="RunPod proxy URL")
 parser.add_argument("--input", type=str, required=True, help="Path to input image")
+
+parser.add_argument(
+    "--ssh-target", type=str, help="SSH user@host (e.g., root@123.456.78.9)"
+)
+parser.add_argument(
+    "--ssh-port",
+    type=str,
+    default="22",
+    help="SSH port (RunPod usually maps this, e.g., 10045)",
+)
+parser.add_argument("--ssh-key", type=str, help="Path to private SSH key (optional)")
+parser.add_argument(
+    "--output-dir",
+    type=str,
+    default="./output",
+    help="Local directory to save the video",
+)
 
 
 parser.add_argument("--prompt", type=str, help="Text prompt (optional if in JSON)")
@@ -244,9 +262,7 @@ with Workflow() as wf:
 
         seg_length = seg.get("length", 81)
         seg_seed = seg.get("seed")
-        seg_nth_last_frame = seg.get(
-            "nth_last_frame", 1
-        )
+        seg_nth_last_frame = seg.get("nth_last_frame", 1)
 
         # ----------------------------------------------------------------
 
@@ -358,4 +374,40 @@ with Workflow() as wf:
         print("No video generated.")
 result = wf.task.wait()
 output_path = result[0]._output["gifs"][0]["fullpath"]
-print(f"runpodctl send {output_path}")
+# print(f"runpodctl send {output_path}")
+if args.ssh_target:
+    print(f"\n--- Retrieving video from {args.ssh_target} ---")
+
+    # Create output directory if it doesn't exist
+    if not os.path.exists(args.output_dir):
+        os.makedirs(args.output_dir)
+
+    # Determine local filename
+    filename = os.path.basename(output_path)
+    local_path = os.path.join(args.output_dir, filename)
+
+    # Construct SCP command
+    # Usage: scp -P <port> -i <key> <user>@<host>:<remote_path> <local_path>
+    scp_cmd = ["scp", "-P", args.ssh_port]
+
+    # Add identity file if provided
+    if args.ssh_key:
+        scp_cmd.extend(["-i", args.ssh_key])
+        # Disable StrictHostKeyChecking for automation if using custom keys to avoid yes/no prompt
+        scp_cmd.extend(["-o", "StrictHostKeyChecking=no"])
+
+    # Add source and destination
+    scp_cmd.append(f"{args.ssh_target}:{output_path}")
+    scp_cmd.append(local_path)
+
+    print(f"Executing: {' '.join(scp_cmd)}")
+
+    try:
+        subprocess.run(scp_cmd, check=True)
+        print(f"✅ Video successfully downloaded to: {local_path}")
+    except subprocess.CalledProcessError as e:
+        print(f"❌ SCP failed with error code {e.returncode}")
+        print("Ensure your SSH keys are set up and the path exists on the remote.")
+else:
+    print(f"Done. File is at (remote): {output_path}")
+    print("Pass --ssh-target 'root@<ip>' to automatically download.")
