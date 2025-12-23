@@ -1,6 +1,7 @@
 import argparse
 import json
 import os
+import random
 from comfy_script.runtime import *
 import datetime
 
@@ -98,11 +99,15 @@ def wan_frame_to_video(
     loras_low,
     end_image=None,
     length=81,
+    seed=None,
 ):
     steps = PrimitiveInt(8)
     cfg_high = PrimitiveFloat(1)
     cfg_low = PrimitiveFloat(1)
     start_low_at_step = PrimitiveInt(4)
+
+    if seed is None:
+        seed = random.randint(0, 0xFFFFFFFFFFFFFF)
 
     empty_negative_conditioning = CLIPTextEncode("", clip)
     conditioning = CLIPTextEncode(
@@ -113,6 +118,7 @@ def wan_frame_to_video(
     # NOTE: Debugging
     print(f"Generating segment with Prompt: '{prompt}'")
     print(f"High Noise LoRAs: {loras_high}")
+    print(f"Seed: {seed}")
 
     lora_model_high = load_loras(model_high, loras_high)
     lora_model_low = load_loras(model_low, loras_low)
@@ -149,7 +155,7 @@ def wan_frame_to_video(
     latent = KSamplerAdvanced(
         lora_model_high,
         "enable",
-        831186949035391,
+        seed,
         steps,
         cfg_high,
         "euler",
@@ -189,7 +195,6 @@ with Workflow(wait=True):
 
     segments_to_process = []
 
-
     if args.segments_json:
         try:
             if os.path.isfile(args.segments_json):
@@ -217,13 +222,10 @@ with Workflow(wait=True):
 
     generated_batches = []
 
-
     last_generated_frame = input_image
-
 
     current_lora_high = args.lora_high
     current_lora_low = args.lora_low
-
 
     for i, seg in enumerate(segments_to_process):
         print(f"\n--- Processing Segment {i + 1}/{len(segments_to_process)} ---")
@@ -233,13 +235,13 @@ with Workflow(wait=True):
             print(f"Error: Segment {i + 1} is missing a 'prompt'. Skipping.")
             continue
 
-
         if "lora_high" in seg:
             current_lora_high = seg["lora_high"]
         if "lora_low" in seg:
             current_lora_low = seg["lora_low"]
 
         seg_length = seg.get("length", 81)
+        seg_seed = seg.get("seed")
 
         # ----------------------------------------------------------------
 
@@ -298,7 +300,6 @@ with Workflow(wait=True):
             print(f"Loading explicit end image: {seg['end_image']}")
             seg_end_image, _ = LoadImage(seg["end_image"])
 
-
         if seg_end_image is not None and seg_start_image is seg_end_image:
             print("Notice: Start Image and End Image are the same (creating a loop).")
 
@@ -318,11 +319,11 @@ with Workflow(wait=True):
             loras_low=current_lora_low,
             end_image=seg_end_image,
             length=seg_length,
+            seed=seg_seed,
         )
 
         generated_batches.append(trimmed_batch)
         last_generated_frame = selected_frame
-
 
     merge_inputs = generated_batches[:5]
     while len(merge_inputs) < 5:
@@ -349,3 +350,4 @@ with Workflow(wait=True):
         print(output)
     else:
         print("No video generated.")
+
