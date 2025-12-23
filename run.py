@@ -41,7 +41,7 @@ def setup_models():
     clip = CLIPLoader("umt5_xxl_fp16.safetensors", "wan", "default")
     vae = VAELoader("wan_2.1_vae.safetensors")
 
-    WAN_HIGH_NOISE_LIGHTNING_STRENGTH = 3.5
+    WAN_HIGH_NOISE_LIGHTNING_STRENGTH = 3.0
 
     WAN_LOW_NOISE_LIGHTNING_STRENGTH = 1.5
 
@@ -100,6 +100,7 @@ def wan_frame_to_video(
     end_image=None,
     length=81,
     seed=None,
+    nth_last_frame=1,
 ):
     steps = PrimitiveInt(8)
     cfg_high = PrimitiveFloat(1)
@@ -184,7 +185,8 @@ def wan_frame_to_video(
     )
 
     segment1 = VAEDecode(latent, vae)
-    selected_frame, trimmed_batch = NthLastFrameSelector(segment1, 1)
+
+    selected_frame, trimmed_batch = NthLastFrameSelector(segment1, nth_last_frame)
     return selected_frame, trimmed_batch
 
 
@@ -242,6 +244,9 @@ with Workflow() as wf:
 
         seg_length = seg.get("length", 81)
         seg_seed = seg.get("seed")
+        seg_nth_last_frame = seg.get(
+            "nth_last_frame", 1
+        )
 
         # ----------------------------------------------------------------
 
@@ -320,6 +325,7 @@ with Workflow() as wf:
             end_image=seg_end_image,
             length=seg_length,
             seed=seg_seed,
+            nth_last_frame=seg_nth_last_frame,
         )
 
         generated_batches.append(trimmed_batch)
