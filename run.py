@@ -347,7 +347,6 @@ with Workflow(wait=True):
             None,
             None,
         )
-        print(output)
+        # print(output)
     else:
         print("No video generated.")
-
