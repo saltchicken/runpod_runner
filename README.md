@@ -37,9 +37,11 @@ A robust automation CLI specifically designed for the **Wan2.2 Image-to-Video (I
    ```
 
 2. Install the required Python dependency:
+
    ```bash
    pip install comfy-script
    ```
+
    _(Note: Standard libraries `argparse`, `json`, `os`, `subprocess` are included in Python)_
 
 ## 📖 Usage
@@ -70,24 +72,44 @@ python run.py \
   --segments-json "./workflow.json"
 ```
 
-### JSON Configuration Structure
+### JSON Configuration Reference
 
-The `--segments-json` file allows specific control per segment.
+The `--segments-json` file expects an array of objects. Each object represents a video segment.
+
+| Key                      | Type        | Description                                                                                                       |
+| :----------------------- | :---------- | :---------------------------------------------------------------------------------------------------------------- |
+| `prompt`                 | `string`    | **Required.** The text prompt for this segment.                                                                   |
+| `length`                 | `int`       | Length of the video segment in frames (default: `81`).                                                            |
+| `seed`                   | `int`       | Specific seed for reproducibility (default: random).                                                              |
+| `lora_high`              | `list[str]` | List of high-noise LoRAs (e.g., `["lora_name:0.8"]`). Overrides previous segment settings.                        |
+| `lora_low`               | `list[str]` | List of low-noise LoRAs. Overrides previous segment settings.                                                     |
+| `nth_last_frame`         | `int`       | Determines which frame from the end of the batch is selected as the output frame for this segment (default: `1`). |
+| **Start Image Controls** |             |                                                                                                                   |
+| `start_image`            | `str`       | Path to an explicit start image file.                                                                             |
+| `start_from_segment`     | `int`       | Index of a previously generated segment to grab the start frame from.                                             |
+| `start_nth_last`         | `int`       | Used with `start_from_segment`: which frame from the end of that segment to use (default: `1`).                   |
+| **End Image Controls**   |             |                                                                                                                   |
+| `end_image`              | `str`       | Path to an explicit end image file (triggers First-Last frame generation).                                        |
+| `use_last_frame_as_end`  | `bool`      | If `true`, uses the last generated frame from the _previous_ loop iteration as the _end_ image for this segment.  |
+| `end_from_segment`       | `int`       | Index of a previously generated segment to grab the end frame from.                                               |
+| `end_nth_last`           | `int`       | Used with `end_from_segment`: which frame from the end of that segment to use.                                    |
+
+#### Full Example
 
 ```json
 [
   {
-    "prompt": "Camera pans right, bustling street",
+    "prompt": "A cyberpunk city street at night",
     "length": 81,
-    "lora_high": ["CinematicStyle:0.8"],
-    "lora_low": ["DetailEnhancer:0.5"]
+    "lora_high": ["NeonStyle:0.8"],
+    "seed": 123456789
   },
   {
-    "prompt": "Zoom into the crowd",
+    "prompt": "Camera pans up to the sky",
     "length": 81,
-    "use_last_frame_as_end": false,
     "start_from_segment": 0,
-    "start_nth_last": 1
+    "start_nth_last": 1,
+    "lora_low": ["MovementHelper:0.5"]
   }
 ]
 ```
