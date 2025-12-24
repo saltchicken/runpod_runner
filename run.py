@@ -30,11 +30,16 @@ parser.add_argument(
 )
 
 parser.add_argument("--prompt", type=str, help="Text prompt (optional if in JSON)")
+
 parser.add_argument(
-    "--lora-high", nargs="*", help="List of high noise LoRAs (optional if in JSON)"
+    "--lora-high",
+    nargs="*",
+    help="List of high noise LoRAs (format: name or name:strength)",
 )
 parser.add_argument(
-    "--lora-low", nargs="*", help="List of low noise LoRAs (optional if in JSON)"
+    "--lora-low",
+    nargs="*",
+    help="List of low noise LoRAs (format: name or name:strength)",
 )
 parser.add_argument(
     "--length", type=int, default=81, help="Length for the first instance"
@@ -47,7 +52,7 @@ parser.add_argument(
 
 args = parser.parse_args()
 
-# ‼️ START NEW UPLOAD LOGIC ‼️
+
 # Determine if input is local or remote
 remote_input_path = args.input
 
@@ -81,7 +86,7 @@ if os.path.exists(args.input):
         exit(1)
 else:
     print(f"Input not found locally, assuming remote path: {args.input}")
-# ‼️ END NEW UPLOAD LOGIC ‼️
+
 
 load(args.proxy)
 from comfy_script.runtime.nodes import *
@@ -122,11 +127,30 @@ def load_loras(model, loras):
     if not loras:
         return ModelSamplingSD3(model, 5)
 
-    lora_model = LoraLoaderModelOnly(model, loras[0], 1)
 
-    if len(loras) == 2:
-        lora_model = LoraLoaderModelOnly(lora_model, loras[1], 1)
-    elif len(loras) > 2:
+    def parse_lora(lora_str):
+        name = lora_str
+        strength = 1.0
+        if ":" in lora_str:
+            parts = lora_str.rsplit(":", 1)
+            try:
+                strength = float(parts[1])
+                name = parts[0]
+            except ValueError:
+                pass
+        return name, strength
+
+
+    name, strength = parse_lora(loras[0])
+    lora_model = LoraLoaderModelOnly(model, name, strength)
+
+
+    if len(loras) >= 2:
+        name, strength = parse_lora(loras[1])
+        lora_model = LoraLoaderModelOnly(lora_model, name, strength)
+
+
+    if len(loras) > 2:
         print("Note: Only first two LoRAs loaded.")
 
     lora_model = ModelSamplingSD3(lora_model, 5)
@@ -159,7 +183,8 @@ def wan_frame_to_video(
     conditioning = CLIPTextEncode(prompt, clip)
 
     print(f"Generating segment with Prompt: '{prompt}'")
-    print(f"High Noise LoRAs: {loras_high}")
+
+    print(f"High Noise LoRAs: {loras_high if loras_high else 'None (Base Model)'}")
     print(f"Seed: {seed}")
 
     lora_model_high = load_loras(model_high, loras_high)
@@ -235,7 +260,6 @@ output = None
 with Workflow() as wf:
     clip, vae, wan_high_noise_model, wan_low_noise_model = setup_models()
 
-    # ‼️ UPDATED TO USE remote_input_path ‼️
     # If uploaded, this now points to /workspace/input/filename.png
     input_image, _ = LoadImage(remote_input_path)
 
@@ -323,9 +347,9 @@ with Workflow() as wf:
             print(f"Loading explicit end image: {seg['end_image']}")
             seg_end_image, _ = LoadImage(seg["end_image"])
 
-        if current_lora_high is None or current_lora_low is None:
-            print(f"Error: Segment {i + 1} missing loras.")
-            exit(1)
+        # if current_lora_high is None or current_lora_low is None:
+        #     print(f"Error: Segment {i + 1} missing loras.")
+        #     exit(1)
 
         selected_frame, trimmed_batch = wan_frame_to_video(
             wan_high_noise_model,
@@ -371,13 +395,12 @@ with Workflow() as wf:
 
 if output is not None:
     print("Waiting for VHSVideoCombine output...")
-    # ‼️ Calling .wait() directly on the node usually ensures the UI result is retrieved
+
     # and fixes the None issue often seen with wf.task.wait() race conditions
     result = output.wait()
 
     output_path = None
 
-    # ‼️ Handle potential return types. output.wait() often returns the dictionary directly
     if isinstance(result, dict) and "gifs" in result:
         output_path = result["gifs"][0]["fullpath"]
     elif (
