@@ -4,8 +4,6 @@ import os
 import random
 from comfy_script.runtime import *
 import datetime
-import subprocess
-import time
 import io
 import requests
 from PIL import Image as PILImage
@@ -236,13 +234,6 @@ def wan_frame_to_video(
 
     segment1 = VAEDecode(latent, vae)
 
-    # images = util.get_images(segment1)
-    # for i, image in enumerate(images):
-    #     filename = f"frame_{i}.png"
-    #     image.save(os.path.join("output", filename))
-
-    # image.save(os.path.join(args.output_dir, filename))
-
     selected_frame, trimmed_batch = NthLastFrameSelector(segment1, nth_last_frame)
     return selected_frame, trimmed_batch
 
@@ -362,6 +353,14 @@ with Workflow() as wf:
 
         generated_batches.append(trimmed_batch)
         last_generated_frame = selected_frame
+
+    for i, batch in enumerate(generated_batches):
+        images = util.get_images(batch)
+        for j, image in enumerate(images):
+            filename = f"segment_{i}_frame_{j}.png"
+            image.save(os.path.join("output", filename))
+
+    # image.save(os.path.join(args.output_dir, filename))
 
     merge_inputs = generated_batches[:5]
     while len(merge_inputs) < 5:
