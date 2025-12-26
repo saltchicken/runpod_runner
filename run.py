@@ -6,6 +6,38 @@ from comfy_script.runtime import *
 import datetime
 import subprocess
 import time
+import io
+import requests
+from PIL import Image as PILImage
+from comfy_script.runtime import client
+
+
+def upload_to_comfy(pil_image, filename="script_input.png"):
+    """
+    Uploads a PIL image to the ComfyUI server's input directory via HTTP.
+    Returns: The filename string expected by LoadImage.
+    """
+
+    byte_stream = io.BytesIO()
+    pil_image.save(byte_stream, format="PNG")
+    byte_stream.seek(0)
+
+    # This ensures it works with your RunPod/Remote setup automatically
+    base_url = client.client.base_url  # e.g., "http://127.0.0.1:8188/"
+    if not base_url.endswith("/"):
+        base_url += "/"
+    target_url = f"{base_url}upload/image"
+
+    # We set overwrite=true so you can reuse this filename for every run
+    files = {"image": (filename, byte_stream, "image/png")}
+    data = {"overwrite": "true"}
+
+    response = requests.post(target_url, files=files, data=data)
+    response.raise_for_status()  # Stop if upload fails
+
+    # Return the filename only (which is what LoadImage accepts)
+    return filename
+
 
 parser = argparse.ArgumentParser(description="Wan2.2 Video Generation Script")
 
@@ -14,19 +46,7 @@ parser.add_argument(
     "--input",
     type=str,
     required=True,
-    help="Local path to image, or remote path if already uploaded",
-)
-
-parser.add_argument(
-    "--ssh-target", type=str, help="SSH user@host (e.g., root@123.456.78.9)"
-)
-parser.add_argument("--ssh-port", type=str, default="22", help="SSH port")
-parser.add_argument("--ssh-key", type=str, help="Path to private SSH key")
-parser.add_argument(
-    "--output-dir",
-    type=str,
-    default="./output",
-    help="Local directory to save the video",
+    help="Local path to image",
 )
 
 parser.add_argument("--prompt", type=str, help="Text prompt (optional if in JSON)")
@@ -54,39 +74,7 @@ args = parser.parse_args()
 
 
 # Determine if input is local or remote
-remote_input_path = args.input
-
-if os.path.exists(args.input):
-    print(f"--- Detected local input file: {args.input} ---")
-    if not args.ssh_target:
-        print("Error: Local file found, but no --ssh-target provided to upload it.")
-        exit(1)
-
-    filename = os.path.basename(args.input)
-    # The target directory on the remote server as defined in your prompt
-    remote_dir = "/workspace/input"
-    remote_input_path = f"{remote_dir}/{filename}"
-
-    print(f"Uploading to {args.ssh_target}:{remote_input_path}...")
-
-    scp_upload_cmd = ["scp", "-P", args.ssh_port]
-    if args.ssh_key:
-        scp_upload_cmd.extend(["-i", args.ssh_key])
-        scp_upload_cmd.extend(["-o", "StrictHostKeyChecking=no"])
-
-    # Upload source -> destination
-    scp_upload_cmd.append(args.input)
-    scp_upload_cmd.append(f"{args.ssh_target}:{remote_dir}/")
-
-    try:
-        subprocess.run(scp_upload_cmd, check=True)
-        print("✅ Upload complete.")
-    except subprocess.CalledProcessError as e:
-        print(f"❌ Upload failed with error code {e.returncode}")
-        exit(1)
-else:
-    print(f"Input not found locally, assuming remote path: {args.input}")
-
+input_path = args.input
 
 load(args.proxy)
 from comfy_script.runtime.nodes import *
@@ -264,8 +252,10 @@ output = None
 with Workflow() as wf:
     clip, vae, wan_high_noise_model, wan_low_noise_model = setup_models()
 
-    # If uploaded, this now points to /workspace/input/filename.png
-    input_image, _ = LoadImage(remote_input_path)
+    my_pil = PILImage.open(input_path)
+    server_filename = upload_to_comfy(my_pil, filename="runpod_input.png")
+
+    input_image, _ = LoadImage(server_filename)
 
     segments_to_process = []
 
@@ -416,33 +406,3 @@ if output is not None:
     elif isinstance(result, list) and len(result) > 0 and hasattr(result[0], "_output"):
         # Fallback for old style List[Result]
         output_path = result[0]._output["gifs"][0]["fullpath"]
-
-    if output_path:
-        if args.ssh_target:
-            print(f"\n--- Retrieving video from {args.ssh_target} ---")
-            if not os.path.exists(args.output_dir):
-                os.makedirs(args.output_dir)
-
-            filename = os.path.basename(output_path)
-            local_path = os.path.join(args.output_dir, filename)
-
-            scp_cmd = ["scp", "-P", args.ssh_port]
-            if args.ssh_key:
-                scp_cmd.extend(["-i", args.ssh_key])
-                scp_cmd.extend(["-o", "StrictHostKeyChecking=no"])
-
-            scp_cmd.append(f"{args.ssh_target}:{output_path}")
-            scp_cmd.append(local_path)
-
-            print(f"Executing: {' '.join(scp_cmd)}")
-            try:
-                subprocess.run(scp_cmd, check=True)
-                print(f"✅ Video successfully downloaded to: {local_path}")
-            except subprocess.CalledProcessError as e:
-                print(f"❌ SCP failed with error code {e.returncode}")
-        else:
-            print(f"Done. File is at (remote): {output_path}")
-    else:
-        print(f"❌ Could not extract output path. Result was: {result}")
-else:
-    print("No output node to wait on.")
