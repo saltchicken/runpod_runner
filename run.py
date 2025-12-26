@@ -127,7 +127,6 @@ def load_loras(model, loras):
     if not loras:
         return ModelSamplingSD3(model, 5)
 
-
     def parse_lora(lora_str):
         name = lora_str
         strength = 1.0
@@ -140,15 +139,12 @@ def load_loras(model, loras):
                 pass
         return name, strength
 
-
     name, strength = parse_lora(loras[0])
     lora_model = LoraLoaderModelOnly(model, name, strength)
-
 
     if len(loras) >= 2:
         name, strength = parse_lora(loras[1])
         lora_model = LoraLoaderModelOnly(lora_model, name, strength)
-
 
     if len(loras) > 2:
         print("Note: Only first two LoRAs loaded.")
@@ -251,6 +247,14 @@ def wan_frame_to_video(
     )
 
     segment1 = VAEDecode(latent, vae)
+
+    # images = util.get_images(segment1)
+    # for i, image in enumerate(images):
+    #     filename = f"frame_{i}.png"
+    #     image.save(os.path.join("output", filename))
+
+    # image.save(os.path.join(args.output_dir, filename))
+
     selected_frame, trimmed_batch = NthLastFrameSelector(segment1, nth_last_frame)
     return selected_frame, trimmed_batch
 
