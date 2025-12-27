@@ -251,8 +251,8 @@ class WanVideoAutomation:
             final_prompt = config.get("prompt", prompt)
             final_lora_high = config.get("lora_high", lora_high)
             final_lora_low = config.get("lora_low", lora_low)
-            final_length = config.get("length", length)
-            final_seed = config.get("seed", None)
+            final_length = length
+            final_seed = None
 
             start_image_node = input_image
             if "start_image" in config:
@@ -339,6 +339,9 @@ class WanVideoAutomation:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
             )
+
+            if process.stdin is None:
+                raise RuntimeError("Failed to open stdin for ffmpeg process")
 
             for frame in frames:
                 with io.BytesIO() as buffer:
