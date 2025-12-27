@@ -2,12 +2,13 @@ import argparse
 import json
 import os
 import random
-from comfy_script.runtime import *
-import datetime
 import io
 import requests
+import subprocess
+import shutil
 from PIL import Image as PILImage
-from comfy_script.runtime import client
+from comfy_script.runtime import client, load, Workflow
+import comfy_script.runtime.util as util
 
 
 def upload_to_comfy(pil_image, filename="script_input.png"):
@@ -15,7 +16,6 @@ def upload_to_comfy(pil_image, filename="script_input.png"):
     Uploads a PIL image to the ComfyUI server's input directory via HTTP.
     Returns: The filename string expected by LoadImage.
     """
-
     byte_stream = io.BytesIO()
     pil_image.save(byte_stream, format="PNG")
     byte_stream.seek(0)
@@ -37,371 +37,352 @@ def upload_to_comfy(pil_image, filename="script_input.png"):
     return filename
 
 
-parser = argparse.ArgumentParser(description="Wan2.2 Video Generation Script")
-
-parser.add_argument("--proxy", type=str, required=True, help="RunPod proxy URL")
-parser.add_argument(
-    "--input",
-    type=str,
-    required=True,
-    help="Local path to image",
-)
-
-parser.add_argument("--prompt", type=str, help="Text prompt (optional if in JSON)")
-
-parser.add_argument(
-    "--lora-high",
-    nargs="*",
-    help="List of high noise LoRAs (format: name or name:strength)",
-)
-parser.add_argument(
-    "--lora-low",
-    nargs="*",
-    help="List of low noise LoRAs (format: name or name:strength)",
-)
-parser.add_argument(
-    "--length", type=int, default=81, help="Length for the first instance"
-)
-parser.add_argument(
-    "--segments-json",
-    type=str,
-    help="JSON string or path to JSON file containing the list of segments.",
-)
-
-args = parser.parse_args()
-
-
-# Determine if input is local or remote
-input_path = args.input
-
-load(args.proxy)
-from comfy_script.runtime.nodes import *
-
-
-def setup_models():
-    clip = CLIPLoader("umt5_xxl_fp16.safetensors", "wan", "default")
-    vae = VAELoader("wan_2.1_vae.safetensors")
-
-    WAN_HIGH_NOISE_LIGHTNING_STRENGTH = 3.0
-    WAN_LOW_NOISE_LIGHTNING_STRENGTH = 1.5
-
-    wan_high_noise_model = UNETLoader(
-        "Wan2.2/wan2.2_i2v_high_noise_14B_fp16.safetensors", "default"
-    )
-    wan_high_noise_model = LoraLoaderModelOnly(
-        wan_high_noise_model,
-        "Wan21_I2V_14B_lightx2v_cfg_step_distill_lora_rank64.safetensors",
-        WAN_HIGH_NOISE_LIGHTNING_STRENGTH,
-    )
-
-    wan_low_noise_model = UNETLoader(
-        "Wan2.2/wan2.2_i2v_low_noise_14B_fp16.safetensors", "default"
-    )
-    wan_low_noise_model = LoraLoaderModelOnly(
-        wan_low_noise_model,
-        "Wan21_I2V_14B_lightx2v_cfg_step_distill_lora_rank64.safetensors",
-        WAN_LOW_NOISE_LIGHTNING_STRENGTH,
-    )
-
-    return clip, vae, wan_high_noise_model, wan_low_noise_model
-
-
-def load_loras(model, loras):
-    if isinstance(loras, str):
-        loras = [loras]
-
-    if not loras:
-        return ModelSamplingSD3(model, 5)
-
-    def parse_lora(lora_str):
-        name = lora_str
-        strength = 1.0
-        if ":" in lora_str:
-            parts = lora_str.rsplit(":", 1)
-            try:
-                strength = float(parts[1])
-                name = parts[0]
-            except ValueError:
-                pass
-        return name, strength
-
-    name, strength = parse_lora(loras[0])
-    lora_model = LoraLoaderModelOnly(model, name, strength)
-
-    if len(loras) >= 2:
-        name, strength = parse_lora(loras[1])
-        lora_model = LoraLoaderModelOnly(lora_model, name, strength)
-
-    if len(loras) > 2:
-        print("Note: Only first two LoRAs loaded.")
-
-    lora_model = ModelSamplingSD3(lora_model, 5)
-    return lora_model
-
-
-def wan_frame_to_video(
-    model_high,
-    model_low,
-    clip,
-    vae,
-    start_image,
-    prompt,
-    loras_high,
-    loras_low,
-    end_image=None,
+def generate_video(
+    proxy,
+    input_path,
+    segment_json=None,
+    prompt=None,
+    lora_high=None,
+    lora_low=None,
     length=81,
-    seed=None,
-    nth_last_frame=1,
 ):
-    steps = PrimitiveInt(8)
-    cfg_high = PrimitiveFloat(1)
-    cfg_low = PrimitiveFloat(1)
-    start_low_at_step = PrimitiveInt(4)
+    """
+    Connects to ComfyUI, generates a single video segment, and returns the list of PIL frames.
+    """
 
-    if seed is None:
-        seed = random.randint(0, 0xFFFFFFFFFFFFFF)
+    load(proxy)
 
-    empty_negative_conditioning = CLIPTextEncode("", clip)
-    conditioning = CLIPTextEncode(prompt, clip)
+    import comfy_script.runtime.nodes as nodes
 
-    print(f"Generating segment with Prompt: '{prompt}'")
+    def setup_models():
+        clip = nodes.CLIPLoader("umt5_xxl_fp16.safetensors", "wan", "default")
+        vae = nodes.VAELoader("wan_2.1_vae.safetensors")
 
-    print(f"High Noise LoRAs: {loras_high if loras_high else 'None (Base Model)'}")
-    print(f"Seed: {seed}")
+        WAN_HIGH_NOISE_LIGHTNING_STRENGTH = 3.0
+        WAN_LOW_NOISE_LIGHTNING_STRENGTH = 1.5
 
-    lora_model_high = load_loras(model_high, loras_high)
-    lora_model_low = load_loras(model_low, loras_low)
-
-    width, height, _ = GetImageSize(start_image)
-
-    if end_image is not None:
-        positive, negative, latent = WanFirstLastFrameToVideo(
-            conditioning,
-            empty_negative_conditioning,
-            vae,
-            width,
-            height,
-            length,
-            1,
-            None,
-            None,
-            start_image,
-            end_image,
+        wan_high_noise_model = nodes.UNETLoader(
+            "Wan2.2/wan2.2_i2v_high_noise_14B_fp16.safetensors", "default"
         )
-    else:
-        positive, negative, latent = WanImageToVideo(
-            conditioning,
-            empty_negative_conditioning,
-            vae,
-            width,
-            height,
-            length,
-            1,
-            None,
-            start_image,
+        wan_high_noise_model = nodes.LoraLoaderModelOnly(
+            wan_high_noise_model,
+            "Wan21_I2V_14B_lightx2v_cfg_step_distill_lora_rank64.safetensors",
+            WAN_HIGH_NOISE_LIGHTNING_STRENGTH,
         )
 
-    latent = KSamplerAdvanced(
-        lora_model_high,
-        "enable",
-        seed,
-        steps,
-        cfg_high,
-        "euler",
-        "simple",
-        positive,
-        negative,
-        latent,
-        0,
-        start_low_at_step,
-        "enable",
-    )
-    latent = KSamplerAdvanced(
-        lora_model_low,
-        "disable",
-        0,
-        steps,
-        cfg_low,
-        "euler",
-        "simple",
-        positive,
-        negative,
-        latent,
-        start_low_at_step,
-        10000,
-        "disable",
-    )
+        wan_low_noise_model = nodes.UNETLoader(
+            "Wan2.2/wan2.2_i2v_low_noise_14B_fp16.safetensors", "default"
+        )
+        wan_low_noise_model = nodes.LoraLoaderModelOnly(
+            wan_low_noise_model,
+            "Wan21_I2V_14B_lightx2v_cfg_step_distill_lora_rank64.safetensors",
+            WAN_LOW_NOISE_LIGHTNING_STRENGTH,
+        )
 
-    segment1 = VAEDecode(latent, vae)
+        return clip, vae, wan_high_noise_model, wan_low_noise_model
 
-    selected_frame, trimmed_batch = NthLastFrameSelector(segment1, nth_last_frame)
-    return selected_frame, trimmed_batch
+    def load_loras(model, loras):
+        if isinstance(loras, str):
+            loras = [loras]
 
+        if not loras:
+            return nodes.ModelSamplingSD3(model, 5)
 
-output = None
+        def parse_lora(lora_str):
+            name = lora_str
+            strength = 1.0
+            if ":" in lora_str:
+                parts = lora_str.rsplit(":", 1)
+                try:
+                    strength = float(parts[1])
+                    name = parts[0]
+                except ValueError:
+                    pass
+            return name, strength
 
-with Workflow() as wf:
-    clip, vae, wan_high_noise_model, wan_low_noise_model = setup_models()
+        name, strength = parse_lora(loras[0])
+        lora_model = nodes.LoraLoaderModelOnly(model, name, strength)
 
-    my_pil = PILImage.open(input_path)
-    server_filename = upload_to_comfy(my_pil, filename="runpod_input.png")
+        if len(loras) >= 2:
+            name, strength = parse_lora(loras[1])
+            lora_model = nodes.LoraLoaderModelOnly(lora_model, name, strength)
 
-    input_image, _ = LoadImage(server_filename)
+        if len(loras) > 2:
+            print("Note: Only first two LoRAs loaded.")
 
-    segments_to_process = []
+        lora_model = nodes.ModelSamplingSD3(lora_model, 5)
+        return lora_model
 
-    if args.segments_json:
-        try:
-            if os.path.isfile(args.segments_json):
-                with open(args.segments_json, "r") as f:
-                    segments_to_process = json.load(f)
-            else:
-                segments_to_process = json.loads(args.segments_json)
-        except json.JSONDecodeError as e:
-            print(f"Error parsing JSON: {e}")
-            exit(1)
-    elif args.prompt:
-        segments_to_process = [
-            {
-                "prompt": args.prompt,
-                "lora_high": args.lora_high,
-                "lora_low": args.lora_low,
-                "length": args.length,
-            }
-        ]
-    else:
-        print("Error: Provide --segments-json OR CLI args.")
-        exit(1)
+    def wan_frame_to_video(
+        model_high,
+        model_low,
+        clip,
+        vae,
+        start_image,
+        prompt,
+        loras_high,
+        loras_low,
+        end_image=None,
+        length=81,
+        seed=None,
+    ):
+        steps = nodes.PrimitiveInt(8)
+        cfg_high = nodes.PrimitiveFloat(1)
+        cfg_low = nodes.PrimitiveFloat(1)
+        start_low_at_step = nodes.PrimitiveInt(4)
 
-    generated_batches = []
-    last_generated_frame = input_image
-    current_lora_high = args.lora_high
-    current_lora_low = args.lora_low
+        if seed is None:
+            seed = random.randint(0, 0xFFFFFFFFFFFFFF)
 
-    for i, seg in enumerate(segments_to_process):
-        print(f"\n--- Processing Segment {i + 1}/{len(segments_to_process)} ---")
+        empty_negative_conditioning = nodes.CLIPTextEncode("", clip)
+        conditioning = nodes.CLIPTextEncode(prompt, clip)
 
-        seg_prompt = seg.get("prompt")
-        if not seg_prompt:
-            print(f"Skipping segment {i + 1} (no prompt).")
-            continue
+        print(f"Generating segment with Prompt: '{prompt}'")
+        print(f"High Noise LoRAs: {loras_high if loras_high else 'None (Base Model)'}")
+        print(f"Seed: {seed}")
 
-        if "lora_high" in seg:
-            current_lora_high = seg["lora_high"]
-        if "lora_low" in seg:
-            current_lora_low = seg["lora_low"]
+        lora_model_high = load_loras(model_high, loras_high)
+        lora_model_low = load_loras(model_low, loras_low)
 
-        seg_length = seg.get("length", 81)
-        seg_seed = seg.get("seed")
-        seg_nth_last_frame = seg.get("nth_last_frame", 1)
+        width, height, _ = nodes.GetImageSize(start_image)
 
-        # Start Image Logic
-        seg_start_image = last_generated_frame
-        if "start_from_segment" in seg:
-            target_idx = seg["start_from_segment"]
-            target_nth = seg.get("start_nth_last", 1)
-            if target_idx < len(generated_batches):
-                print(f"Start Image: Segment {target_idx}, {target_nth}th last frame.")
-                seg_start_image, _ = NthLastFrameSelector(
-                    generated_batches[target_idx], target_nth
-                )
-            else:
-                print(f"Error: start_from_segment {target_idx} invalid.")
+        if end_image is not None:
+            positive, negative, latent = nodes.WanFirstLastFrameToVideo(
+                conditioning,
+                empty_negative_conditioning,
+                vae,
+                width,
+                height,
+                length,
+                1,
+                None,
+                None,
+                start_image,
+                end_image,
+            )
+        else:
+            positive, negative, latent = nodes.WanImageToVideo(
+                conditioning,
+                empty_negative_conditioning,
+                vae,
+                width,
+                height,
+                length,
+                1,
+                None,
+                start_image,
+            )
+
+        latent = nodes.KSamplerAdvanced(
+            lora_model_high,
+            "enable",
+            seed,
+            steps,
+            cfg_high,
+            "euler",
+            "simple",
+            positive,
+            negative,
+            latent,
+            0,
+            start_low_at_step,
+            "enable",
+        )
+        latent = nodes.KSamplerAdvanced(
+            lora_model_low,
+            "disable",
+            0,
+            steps,
+            cfg_low,
+            "euler",
+            "simple",
+            positive,
+            negative,
+            latent,
+            start_low_at_step,
+            10000,
+            "disable",
+        )
+
+        segment1 = nodes.VAEDecode(latent, vae)
+
+        # Returning the decoded frames directly.
+        return segment1
+
+    # --- Main Workflow Execution ---
+    with Workflow() as wf:
+        clip, vae, wan_high_noise_model, wan_low_noise_model = setup_models()
+
+        input_image, _ = nodes.LoadImage(input_path)
+
+        # Now expects a single configuration (dict) or falls back to CLI args.
+        config = {}
+
+        if segment_json:
+            try:
+                loaded_json = None
+                if os.path.isfile(segment_json):
+                    with open(segment_json, "r") as f:
+                        loaded_json = json.load(f)
+                else:
+                    loaded_json = json.loads(segment_json)
+
+                if isinstance(loaded_json, list):
+                    if len(loaded_json) > 0:
+                        config = loaded_json[0]
+                elif isinstance(loaded_json, dict):
+                    config = loaded_json
+            except json.JSONDecodeError as e:
+                print(f"Error parsing JSON: {e}")
                 exit(1)
-        elif "start_image" in seg:
-            print(f"Loading explicit start image: {seg['start_image']}")
-            seg_start_image, _ = LoadImage(seg["start_image"])
 
-        # End Image Logic
-        seg_end_image = None
-        if "end_from_segment" in seg:
-            target_idx = seg["end_from_segment"]
-            target_nth = seg.get("end_nth_last", 1)
-            if target_idx < len(generated_batches):
-                print(f"End Image: Segment {target_idx}, {target_nth}th last frame.")
-                seg_end_image, _ = NthLastFrameSelector(
-                    generated_batches[target_idx], target_nth
-                )
-            else:
-                print(f"Error: end_from_segment {target_idx} invalid.")
-                exit(1)
-        elif seg.get("use_last_frame_as_end", False):
-            print("Using last generated frame as End Image.")
-            seg_end_image = last_generated_frame
-        elif "end_image" in seg:
-            print(f"Loading explicit end image: {seg['end_image']}")
-            seg_end_image, _ = LoadImage(seg["end_image"])
+        final_prompt = config.get("prompt", prompt)
+        final_lora_high = config.get("lora_high", lora_high)
+        final_lora_low = config.get("lora_low", lora_low)
+        final_length = config.get("length", length)
+        final_seed = config.get("seed", None)
 
-        # if current_lora_high is None or current_lora_low is None:
-        #     print(f"Error: Segment {i + 1} missing loras.")
-        #     exit(1)
+        # We already loaded CLI input as `input_image` above.
+        start_image_node = input_image
+        if "start_image" in config:
+            print(f"Loading explicit start image from JSON: {config['start_image']}")
+            start_image_node, _ = nodes.LoadImage(config["start_image"])
 
-        selected_frame, trimmed_batch = wan_frame_to_video(
+        end_image_node = None
+        if "end_image" in config:
+            print(f"Loading explicit end image: {config['end_image']}")
+            end_image_node, _ = nodes.LoadImage(config["end_image"])
+
+        if not final_prompt:
+            print("Error: No prompt provided in JSON or CLI.")
+            return []
+
+        video_batch = wan_frame_to_video(
             wan_high_noise_model,
             wan_low_noise_model,
             clip,
             vae,
-            start_image=seg_start_image,
-            prompt=seg_prompt,
-            loras_high=current_lora_high,
-            loras_low=current_lora_low,
-            end_image=seg_end_image,
-            length=seg_length,
-            seed=seg_seed,
-            nth_last_frame=seg_nth_last_frame,
+            start_image=start_image_node,
+            prompt=final_prompt,
+            loras_high=final_lora_high,
+            loras_low=final_lora_low,
+            end_image=end_image_node,
+            length=final_length,
+            seed=final_seed,
         )
 
-        generated_batches.append(trimmed_batch)
-        last_generated_frame = selected_frame
+        print("\n--- Retrieving Frames from Server ---")
+        all_video_frames = util.get_images(video_batch)
 
-    for i, batch in enumerate(generated_batches):
-        images = util.get_images(batch)
-        for j, image in enumerate(images):
-            filename = f"segment_{i}_frame_{j}.png"
-            image.save(os.path.join("output", filename))
+        print(f"Done! {len(all_video_frames)} frames returned.")
+        return all_video_frames
 
-    # image.save(os.path.join(args.output_dir, filename))
 
-    merge_inputs = generated_batches[:5]
-    while len(merge_inputs) < 5:
-        merge_inputs.append(None)
+def save_mp4_ffmpeg(frames, output_path, fps=16):
+    """
+    Pipes the PIL frames directly to ffmpeg to create an MP4.
+    """
+    if not frames:
+        print("No frames to save.")
+        return
 
-    if len(generated_batches) > 0:
-        merged = VideoMerge(*merge_inputs)
-        timestamp = datetime.datetime.now().strftime("%Y_%m_%d_%H%M%S")
-        output_filename = f"wan22_16fps/scripted/{timestamp}"
+    # Check if ffmpeg is installed
+    if not shutil.which("ffmpeg"):
+        print("❌ Error: 'ffmpeg' not found in PATH.")
+        print("   Falling back to saving individual frames to directory.")
 
-        output = VHSVideoCombine(
-            merged,
-            16,
-            0,
-            output_filename,
-            "video/h264-mp4",
-            False,
-            True,
-            None,
-            None,
-            None,
+        # Fallback behavior
+        base_dir = os.path.dirname(output_path)
+        for i, image in enumerate(frames):
+            filename = f"frame_{i:04d}.png"
+            image.save(os.path.join(base_dir, filename))
+        return
+
+    print(f"🎬 Encoding {len(frames)} frames to {output_path} at {fps} FPS...")
+
+    # ffmpeg command: read from pipe, output h264 mp4
+    cmd = [
+        "ffmpeg",
+        "-y",  # Overwrite output file
+        "-f",
+        "image2pipe",  # Input format
+        "-vcodec",
+        "png",  # Input codec
+        "-r",
+        str(fps),  # Frame rate
+        "-i",
+        "-",  # Input from stdin
+        "-vcodec",
+        "libx264",
+        "-pix_fmt",
+        "yuv420p",
+        "-crf",
+        "18",  # Quality (lower is better)
+        "-preset",
+        "slow",
+        output_path,
+    ]
+
+    try:
+        # Open subprocess with piped stdin/stdout/stderr
+        process = subprocess.Popen(
+            cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE
         )
-    else:
-        print("No video generated.")
 
-if output is not None:
-    print("Waiting for VHSVideoCombine output...")
+        # Write frames to ffmpeg stdin
+        for frame in frames:
+            with io.BytesIO() as buffer:
+                frame.save(buffer, format="PNG")
+                process.stdin.write(buffer.getvalue())
 
-    # and fixes the None issue often seen with wf.task.wait() race conditions
-    result = output.wait()
+        # Close stdin and wait for finish
+        stdout, stderr = process.communicate()
 
-    output_path = None
+        if process.returncode != 0:
+            print(f"❌ FFmpeg Error:\n{stderr.decode()}")
+        else:
+            print(f"✅ Video saved successfully: {output_path}")
 
-    if isinstance(result, dict) and "gifs" in result:
-        output_path = result["gifs"][0]["fullpath"]
-    elif (
-        hasattr(result, "_output")
-        and result._output is not None
-        and "gifs" in result._output
-    ):
-        output_path = result._output["gifs"][0]["fullpath"]
-    elif isinstance(result, list) and len(result) > 0 and hasattr(result[0], "_output"):
-        # Fallback for old style List[Result]
-        output_path = result[0]._output["gifs"][0]["fullpath"]
+    except Exception as e:
+        print(f"❌ Failed to process video: {e}")
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Wan2.2 Video Generation Script")
+    parser.add_argument("--proxy", type=str, required=True, help="RunPod proxy URL")
+    parser.add_argument("--input", type=str, required=True, help="Local path to image")
+    parser.add_argument("--prompt", type=str, help="Text prompt (optional if in JSON)")
+    parser.add_argument("--lora-high", nargs="*", help="List of high noise LoRAs")
+    parser.add_argument("--lora-low", nargs="*", help="List of low noise LoRAs")
+    parser.add_argument("--length", type=int, default=81, help="Length for the video")
+    parser.add_argument(
+        "--segment-json", type=str, help="JSON string or path to JSON file"
+    )
+    parser.add_argument(
+        "--output-dir", type=str, default="./output", help="Directory to save output"
+    )
+
+    args = parser.parse_args()
+
+    my_pil = PILImage.open(args.input)
+    input_path = upload_to_comfy(my_pil, filename="runpod_input.png")
+
+    video_frames = generate_video(
+        proxy=args.proxy,
+        input_path=input_path,
+        segment_json=args.segment_json,
+        prompt=args.prompt,
+        lora_high=args.lora_high,
+        lora_low=args.lora_low,
+        length=args.length,
+    )
+
+    output_dir = args.output_dir
+    if output_dir:
+        os.makedirs(output_dir, exist_ok=True)
+
+        output_filename = os.path.join(output_dir, "output.mp4")
+        save_mp4_ffmpeg(
+            video_frames, output_filename, fps=16
+        )  # Wan2.2 standard is often 16fps
+
