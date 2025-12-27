@@ -6,6 +6,7 @@ import io
 import requests
 import subprocess
 import shutil
+from datetime import datetime
 from PIL import Image as PILImage
 from comfy_script.runtime import client, load, Workflow
 import comfy_script.runtime.util as util
@@ -381,7 +382,8 @@ if __name__ == "__main__":
     if output_dir:
         os.makedirs(output_dir, exist_ok=True)
 
-        output_filename = os.path.join(output_dir, "output.mp4")
+        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        output_filename = os.path.join(output_dir, f"{timestamp}.mp4")
         save_mp4_ffmpeg(
             video_frames, output_filename, fps=16
         )  # Wan2.2 standard is often 16fps
