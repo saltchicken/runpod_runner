@@ -14,7 +14,7 @@ class WanVideoAutomation:
         """
         Initializes the automation client and connects to the ComfyUI instance.
         """
-        print(f"‼️ Connecting to ComfyUI at {proxy_url}...")
+        print(f"Connecting to ComfyUI at {proxy_url}...")
         load(proxy_url)
 
         import comfy_script.runtime.nodes as nodes
@@ -226,7 +226,6 @@ class WanVideoAutomation:
                         with open(segment_json, "r") as f:
                             loaded_json = json.load(f)
                     else:
-
                         # This allows users to reference presets just by filename (e.g. "preset.json")
                         package_dir = os.path.dirname(os.path.abspath(__file__))
                         segments_path = os.path.join(
@@ -234,11 +233,10 @@ class WanVideoAutomation:
                         )
 
                         if os.path.isfile(segments_path):
-                            print(f"‼️ Found segment JSON in package: {segments_path}")
+                            print(f"Found segment JSON in package: {segments_path}")
                             with open(segments_path, "r") as f:
                                 loaded_json = json.load(f)
                         else:
-
                             loaded_json = json.loads(segment_json)
 
                     if isinstance(loaded_json, list):
@@ -356,3 +354,4 @@ class WanVideoAutomation:
 
         except Exception as e:
             print(f"❌ Failed to process video: {e}")
+
