@@ -1,0 +1,82 @@
+# --- Version Control ---
+.git
+.gitignore
+.gitattributes
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# --- Virtual Environments (Conda/Venv) ---
+# It's common to name envs 'venv', 'env', or '.venv'
+venv/
+env/
+.env
+.venv/
+conda/
+
+# --- Machine Learning & Large Files ---
+# Prevent massive model weights from slowing down the build context context.
+# Usually, you want to mount these as volumes at runtime, not bake them into the image.
+*.safetensors
+*.ckpt
+*.pt
+*.pth
+*.bin
+*.onnx
+models/checkpoints/
+models/loras/
+models/vae/
+
+# --- ComfyUI / App Specific ---
+# Ignore generated outputs and temporary inputs
+output/
+input/
+temp/
+user/
+
+# --- JavaScript / Node (for custom nodes) ---
+node_modules/
+npm-debug.log
+yarn-error.log
+package-lock.json
+yarn.lock
+
+# --- IDEs & Editors ---
+.vscode/
+.idea/
+*.swp
+*.swo
+.project
+.settings/
+
+# --- OS Generated Files ---
+.DS_Store
+Thumbs.db
+ehthumbs.db
+desktop.ini
+
+# --- Logs ---
+*.log
+
+# --- This project ---
+output/
