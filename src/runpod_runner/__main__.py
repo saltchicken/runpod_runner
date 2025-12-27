@@ -2,10 +2,13 @@ import argparse
 import os
 from datetime import datetime
 from PIL import Image as PILImage
+from dotenv import load_dotenv
 from .wan_video import WanVideoAutomation
 
 
 def main():
+    load_dotenv()
+
     parser = argparse.ArgumentParser(description="Wan2.2 Video Generation Script")
     parser.add_argument("--proxy", type=str, required=True, help="RunPod proxy URL")
     parser.add_argument("--input", type=str, required=True, help="Local path to image")
@@ -18,19 +21,38 @@ def main():
         type=str,
         help="JSON string or path to JSON file",
     )
+
     parser.add_argument(
-        "--output-dir", type=str, default="./output", help="Directory to save output"
+        "--output-dir", type=str, default=None, help="Directory to save output"
     )
 
     args = parser.parse_args()
 
+    input_path = args.input
+    env_input_dir = os.getenv("INPUT_DIR")
+
+    if not os.path.exists(input_path) and env_input_dir:
+        potential_path = os.path.join(env_input_dir, input_path)
+        if os.path.exists(potential_path):
+            input_path = potential_path
+            print(f"Found input image in configured directory: {input_path}")
+
+    if not os.path.exists(input_path):
+        raise FileNotFoundError(
+            f"Input file not found: {args.input} (checked {input_path})"
+        )
+
     automation = WanVideoAutomation(proxy_url=args.proxy)
 
-    my_pil = PILImage.open(args.input)
-    input_path = automation.upload_to_comfy(my_pil, filename="runpod_input.png")
+    my_pil = PILImage.open(input_path)
+
+    upload_filename = os.path.basename(input_path)
+    server_input_path = automation.upload_to_comfy(
+        my_pil, filename=f"runpod_{upload_filename}"
+    )
 
     video_frames = automation.generate_video(
-        input_path=input_path,
+        input_path=server_input_path,
         segment=args.segment,
         prompt=args.prompt,
         lora_high=args.lora_high,
@@ -38,7 +60,8 @@ def main():
         length=args.length,
     )
 
-    output_dir = args.output_dir
+    output_dir = args.output_dir or os.getenv("OUTPUT_DIR") or "./output"
+
     if output_dir:
         os.makedirs(output_dir, exist_ok=True)
 
