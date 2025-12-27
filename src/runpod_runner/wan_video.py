@@ -206,6 +206,7 @@ class WanVideoAutomation:
         lora_high=None,
         lora_low=None,
         length=81,
+        seed=None,
     ):
         """
         Orchestrates the generation workflow.
@@ -266,7 +267,7 @@ class WanVideoAutomation:
             final_lora_high = config.get("lora_high", lora_high)
             final_lora_low = config.get("lora_low", lora_low)
             final_length = length
-            final_seed = None
+            final_seed = seed
 
             start_image_node = input_image
             if "start_image" in config:
@@ -338,11 +339,11 @@ class WanVideoAutomation:
             "-vcodec",
             "libx264",
             "-pix_fmt",
-            "yuv420p",
+            "yuv444p",
             "-crf",
             "0",
             "-preset",
-            "slow",
+            "veryslow",
             output_path,
         ]
 
