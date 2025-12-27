@@ -201,7 +201,7 @@ class WanVideoAutomation:
     def generate_video(
         self,
         input_path,
-        segment_json=None,
+        segment=None,
         prompt=None,
         lora_high=None,
         lora_low=None,
@@ -218,26 +218,40 @@ class WanVideoAutomation:
 
             config = {}
 
-            if segment_json:
+            if segment:
                 try:
                     loaded_json = None
 
-                    if os.path.isfile(segment_json):
-                        with open(segment_json, "r") as f:
+                    # 1. Check if exact file path exists
+                    if os.path.isfile(segment):
+                        with open(segment, "r") as f:
+                            loaded_json = json.load(f)
+
+                    elif os.path.isfile(f"{segment}.json"):
+                        with open(f"{segment}.json", "r") as f:
                             loaded_json = json.load(f)
                     else:
-                        # This allows users to reference presets just by filename (e.g. "preset.json")
+                        # This allows users to reference presets just by filename (e.g. "preset" or "preset.json")
                         package_dir = os.path.dirname(os.path.abspath(__file__))
-                        segments_path = os.path.join(
-                            package_dir, "segments", segment_json
+
+                        segments_path = os.path.join(package_dir, "segments", segment)
+                        segments_path_ext = os.path.join(
+                            package_dir, "segments", f"{segment}.json"
                         )
 
+                        # 3. Check segments folder (exact)
                         if os.path.isfile(segments_path):
                             print(f"Found segment JSON in package: {segments_path}")
                             with open(segments_path, "r") as f:
                                 loaded_json = json.load(f)
+
+                        elif os.path.isfile(segments_path_ext):
+                            print(f"Found segment JSON in package: {segments_path_ext}")
+                            with open(segments_path_ext, "r") as f:
+                                loaded_json = json.load(f)
                         else:
-                            loaded_json = json.loads(segment_json)
+                            # 5. Fallback: Parse as raw JSON string
+                            loaded_json = json.loads(segment)
 
                     if isinstance(loaded_json, list):
                         if len(loaded_json) > 0:
@@ -300,7 +314,7 @@ class WanVideoAutomation:
 
         if not shutil.which("ffmpeg"):
             print("❌ Error: 'ffmpeg' not found in PATH.")
-            print("   Falling back to saving individual frames to directory.")
+            print("    Falling back to saving individual frames to directory.")
 
             base_dir = os.path.dirname(output_path)
             for i, image in enumerate(frames):

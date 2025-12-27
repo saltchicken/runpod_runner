@@ -14,7 +14,9 @@ def main():
     parser.add_argument("--lora-low", nargs="*", help="List of low noise LoRAs")
     parser.add_argument("--length", type=int, default=81, help="Length for the video")
     parser.add_argument(
-        "--segment-json", type=str, help="JSON string or path to JSON file"
+        "--segment",
+        type=str,
+        help="JSON string or path to JSON file",
     )
     parser.add_argument(
         "--output-dir", type=str, default="./output", help="Directory to save output"
@@ -29,7 +31,7 @@ def main():
 
     video_frames = automation.generate_video(
         input_path=input_path,
-        segment_json=args.segment_json,
+        segment=args.segment,
         prompt=args.prompt,
         lora_high=args.lora_high,
         lora_low=args.lora_low,
@@ -48,3 +50,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
