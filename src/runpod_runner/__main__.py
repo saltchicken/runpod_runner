@@ -1,5 +1,6 @@
 import argparse
 import os
+import random
 from datetime import datetime
 from PIL import Image as PILImage
 from dotenv import load_dotenv
@@ -11,7 +12,8 @@ def main():
 
     parser = argparse.ArgumentParser(description="Wan2.2 Video Generation Script")
     parser.add_argument("--proxy", type=str, required=True, help="RunPod proxy URL")
-    parser.add_argument("--input", type=str, required=True, help="Local path to image")
+
+    parser.add_argument("--input", type=str, required=False, help="Local path to image")
     parser.add_argument("--prompt", type=str, help="Text prompt (optional if in JSON)")
     parser.add_argument("--lora-high", nargs="*", help="List of high noise LoRAs")
     parser.add_argument("--lora-low", nargs="*", help="List of low noise LoRAs")
@@ -31,6 +33,27 @@ def main():
     input_path = args.input
     env_input_dir = os.getenv("INPUT_DIR")
 
+    if input_path is None:
+        if env_input_dir and os.path.exists(env_input_dir):
+            valid_extensions = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
+            files = [
+                f
+                for f in os.listdir(env_input_dir)
+                if os.path.isfile(os.path.join(env_input_dir, f))
+                and os.path.splitext(f)[1].lower() in valid_extensions
+            ]
+            if files:
+                input_path = os.path.join(env_input_dir, random.choice(files))
+                print(f"No input provided. Selected random file: {input_path}")
+            else:
+                raise FileNotFoundError(
+                    f"No valid image files found in INPUT_DIR: {env_input_dir}"
+                )
+        else:
+            raise ValueError(
+                "Input not provided and INPUT_DIR environment variable is not set or valid."
+            )
+
     if not os.path.exists(input_path) and env_input_dir:
         potential_path = os.path.join(env_input_dir, input_path)
         if os.path.exists(potential_path):
@@ -39,7 +62,7 @@ def main():
 
     if not os.path.exists(input_path):
         raise FileNotFoundError(
-            f"Input file not found: {args.input} (checked {input_path})"
+            f"Input file not found: {args.input or 'random selection'} (checked {input_path})"
         )
 
     automation = WanVideoAutomation(proxy_url=args.proxy)
@@ -73,4 +96,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
