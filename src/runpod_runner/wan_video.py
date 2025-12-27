@@ -7,6 +7,7 @@ import subprocess
 import shutil
 from comfy_script.runtime import client, load, Workflow
 import comfy_script.runtime.util as util
+from .utils import quiet
 
 
 class WanVideoAutomation:
@@ -358,10 +359,11 @@ class WanVideoAutomation:
             if process.stdin is None:
                 raise RuntimeError("Failed to open stdin for ffmpeg process")
 
-            for frame in frames:
-                with io.BytesIO() as buffer:
-                    frame.save(buffer, format="PNG")
-                    process.stdin.write(buffer.getvalue())
+            with quiet():
+                for frame in frames:
+                    with io.BytesIO() as buffer:
+                        frame.save(buffer, format="PNG")
+                        process.stdin.write(buffer.getvalue())
 
             stdout, stderr = process.communicate()
 
