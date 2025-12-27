@@ -18,6 +18,8 @@ def main():
     parser.add_argument("--lora-high", nargs="*", help="List of high noise LoRAs")
     parser.add_argument("--lora-low", nargs="*", help="List of low noise LoRAs")
     parser.add_argument("--length", type=int, default=81, help="Length for the video")
+    parser.add_argument("--seed", type=int, default=None, help="Length for the video")
+
     parser.add_argument(
         "--segment",
         type=str,
@@ -81,6 +83,7 @@ def main():
         lora_high=args.lora_high,
         lora_low=args.lora_low,
         length=args.length,
+        seed=args.seed,
     )
 
     output_dir = args.output_dir or os.getenv("OUTPUT_DIR") or "./output"
