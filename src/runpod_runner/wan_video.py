@@ -340,7 +340,7 @@ class WanVideoAutomation:
             "-pix_fmt",
             "yuv420p",
             "-crf",
-            "18",
+            "0",
             "-preset",
             "slow",
             output_path,
@@ -371,4 +371,3 @@ class WanVideoAutomation:
 
         except Exception as e:
             print(f"❌ Failed to process video: {e}")
-
