@@ -15,7 +15,7 @@ RUN git clone https://github.com/comfyanonymous/ComfyUI.git
 WORKDIR /ComfyUI
 RUN pip install --upgrade pip && \
     pip install -r requirements.txt && \
-    pip install jupyterlab
+    pip install --force-reinstall "jupyterlab<4" "notebook<7" "jupyter-server<2"
 
 # 4. Install ComfyUI Manager
 WORKDIR /ComfyUI/custom_nodes
@@ -33,5 +33,7 @@ RUN git clone https://github.com/Chaoses-Ib/ComfyScript.git && \
 WORKDIR /
 COPY scripts/start.sh /start.sh
 RUN chmod +x /start.sh
+
+EXPOSE 8888 8188
 
 CMD ["/start.sh"]
