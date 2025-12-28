@@ -1,5 +1,7 @@
 import argparse
 import os
+import sys
+import shlex
 import random
 from datetime import datetime
 from PIL import Image as PILImage
@@ -9,6 +11,8 @@ from .wan_video import WanVideoAutomation
 
 def main():
     load_dotenv()
+
+    print(f"🚀 Executed Command: {' '.join(shlex.quote(arg) for arg in sys.argv)}")
 
     parser = argparse.ArgumentParser(description="Wan2.2 Video Generation Script")
     parser.add_argument("--proxy", type=str, required=True, help="RunPod proxy URL")
@@ -220,7 +224,6 @@ def main():
                 "⚠️ Loop requested for Append but could not determine loop frame (is input a video?)."
             )
 
-
     segment_to_use = args.segment
     if segment_to_use is None:
         package_dir = os.path.dirname(os.path.abspath(__file__))
@@ -233,15 +236,11 @@ def main():
             if segment_files:
                 random_segment = random.choice(segment_files)
                 segment_to_use = os.path.join(segments_dir, random_segment)
-                print(
-                    f"‼️ No segment provided. Selected random segment: {random_segment}"
-                )
+                print(f"No segment provided. Selected random segment: {random_segment}")
             else:
-                print(
-                    f"‼️ No segment provided and no JSON files found in {segments_dir}."
-                )
+                print(f"No segment provided and no JSON files found in {segments_dir}.")
         else:
-            print(f"‼️ Segments directory not found at: {segments_dir}")
+            print(f"Segments directory not found at: {segments_dir}")
 
     video_frames = automation.generate_video(
         input_path=gen_start_path,
@@ -307,3 +306,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
