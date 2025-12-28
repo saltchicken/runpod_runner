@@ -5,3 +5,4 @@ __pycache__
 *.egg-info
 .env
 segments
+custom_loop_runner.sh
