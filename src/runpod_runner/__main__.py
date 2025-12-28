@@ -19,9 +19,7 @@ def main():
     parser.add_argument("--lora-low", nargs="*", help="List of low noise LoRAs")
     parser.add_argument("--length", type=int, default=81, help="Length for the video")
     parser.add_argument("--seed", type=int, default=None, help="Seed for the video")
-    parser.add_argument(
-        "--end-image", type=str, help="Path to end image (optional)"
-    )
+    parser.add_argument("--end-image", type=str, help="Path to end image (optional)")
 
     parser.add_argument(
         "--video-time",
@@ -38,6 +36,13 @@ def main():
 
     parser.add_argument(
         "--output-dir", type=str, default=None, help="Directory to save output"
+    )
+
+
+    parser.add_argument(
+        "--prepend",
+        action="store_true",
+        help="If set, generates video leading up to the input video. Requires --end-image to be set (acts as start image).",
     )
 
     args = parser.parse_args()
@@ -84,7 +89,14 @@ def main():
     if is_video_input:
         print("📹 Detected MP4 input.")
 
-        my_pil = automation.extract_frame(input_path, timestamp=args.video_time)
+
+        # If prepend is on and no time specified, assume start (0.0).
+        # Otherwise default (None) implies end of video.
+        extract_time = args.video_time
+        if extract_time is None and args.prepend:
+            extract_time = 0.0
+
+        my_pil = automation.extract_frame(input_path, timestamp=extract_time)
     else:
         my_pil = PILImage.open(input_path)
 
@@ -96,7 +108,6 @@ def main():
     server_input_path = automation.upload_to_comfy(
         my_pil, filename=f"runpod_{upload_filename}"
     )
-
 
     server_end_image_path = None
     if args.end_image:
@@ -110,15 +121,42 @@ def main():
             end_pil, filename=f"runpod_end_{end_filename}"
         )
 
+
+    if args.prepend:
+
+        # if not server_end_image_path:
+        #     raise ValueError("❌ --prepend mode requires --end-image to specify the starting frame.")
+
+        # In prepend mode:
+        # End Image = The frame extracted from the video (server_input_path)
+        gen_end_path = server_input_path
+
+        # Start Image = The user provided "end image" OR fallback to extracted frame
+        if server_end_image_path:
+            gen_start_path = server_end_image_path
+        else:
+            print(
+                "⚠️ No start image provided for prepend. Using input extracted frame as start (Start=End)."
+            )
+            gen_start_path = server_input_path
+
+        print("🔄 Prepend Mode: Generating video LEADING UP TO input video frame.")
+    else:
+        # Standard Mode:
+        # Start Image = The frame extracted from video (or input image)
+        # End Image = The user provided end image (optional)
+        gen_start_path = server_input_path
+        gen_end_path = server_end_image_path
+
     video_frames = automation.generate_video(
-        input_path=server_input_path,
+        input_path=gen_start_path,
         segment=args.segment,
         prompt=args.prompt,
         lora_high=args.lora_high,
         lora_low=args.lora_low,
         length=args.length,
         seed=args.seed,
-        end_image_path=server_end_image_path,
+        end_image_path=gen_end_path,
     )
 
     output_dir = args.output_dir or os.getenv("OUTPUT_DIR") or "./output"
@@ -140,12 +178,33 @@ def main():
         automation.save_mp4_ffmpeg(video_frames, generated_filename, fps=16)
 
         if is_video_input and os.path.exists(generated_filename):
-            automation.concatenate_videos(
-                input_path,
-                generated_filename,
-                final_filename,
-                trim_duration=args.video_time,
-            )
+
+            if args.prepend:
+                # Order: Generated -> Input Video
+                # Generated is whole.
+                # Input Video starts at video-time (or 0).
+
+                cut_point = args.video_time if args.video_time is not None else 0.0
+
+                automation.concatenate_videos(
+                    generated_filename,  # Video 1
+                    input_path,  # Video 2
+                    final_filename,
+                    v1_cut=None,  # Don't cut generated
+                    v2_start=cut_point,  # Start input video at cut point
+                )
+            else:
+                # Order: Input Video -> Generated
+                # Input Video ends at video-time.
+                # Generated is whole (starts from frame 1 to avoid dupe).
+
+                automation.concatenate_videos(
+                    input_path,  # Video 1
+                    generated_filename,  # Video 2
+                    final_filename,
+                    v1_cut=args.video_time,  # Cut input video at end
+                    v2_start=None,  # Default logic (drop 1st frame)
+                )
 
 
 if __name__ == "__main__":

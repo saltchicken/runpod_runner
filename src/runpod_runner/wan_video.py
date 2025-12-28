@@ -94,36 +94,45 @@ class WanVideoAutomation:
             if os.path.exists(tmp_filename):
                 os.remove(tmp_filename)
 
+
     def concatenate_videos(
-        self, video1_path, video2_path, output_path, trim_duration=None
+        self, video1_path, video2_path, output_path, v1_cut=None, v2_start=None
     ):
         """
         Concatenates two video files.
-        If trim_duration is set, video1 is cut at that timestamp before appending video2.
+        v1_cut: If set, Video 1 is trimmed to this duration (from start).
+        v2_start: If set, Video 2 starts from this timestamp.
         """
         print(
-            f"🔗 Splicing videos:\n  1. {video1_path} (Trim: {trim_duration})\n  2. {video2_path}\n  -> {output_path}"
+            f"🔗 Splicing videos:\n  1. {video1_path} (Cut At: {v1_cut})\n  2. {video2_path} (Start At: {v2_start})\n  -> {output_path}"
         )
 
         cmd = ["ffmpeg", "-y", "-i", video1_path, "-i", video2_path]
 
-        if trim_duration is not None:
-            # trim=duration=X keeps the first X seconds.
-            # setpts=PTS-STARTPTS is crucial when trimming to reset timestamps.
 
-            filter_str = (
-                f"[0:v]trim=duration={trim_duration},setpts=PTS-STARTPTS[v0];"
-                f"[1:v]trim=start_frame=1,setpts=PTS-STARTPTS[v1];"
-                f"[v0][v1]concat=n=2:v=1:a=0[outv]"
+        # Video 1 Filter
+        v1_filter = "[0:v]setpts=PTS-STARTPTS[v0];"
+        if v1_cut is not None:
+            v1_filter = f"[0:v]trim=duration={v1_cut},setpts=PTS-STARTPTS[v0];"
+
+        # Video 2 Filter
+        # We always attempt to drop 1 frame of overlap for smoothness if just appending.
+        # If v2_start is provided, we seek to that point first.
+
+        v2_trim_cmd = ""
+        if v2_start is not None:
+            # Trim from start point, then drop 1 frame to avoid duplication of the connection frame
+            # chaining trims: first trim gets the segment, second trim removes 1st frame of that segment
+            v2_trim_cmd = (
+                f"trim=start={v2_start},setpts=PTS-STARTPTS,trim=start_frame=1"
             )
         else:
-            # Simple concat if no trim needed
+            # Standard: just drop first frame
+            v2_trim_cmd = "trim=start_frame=1"
 
-            filter_str = (
-                f"[0:v]setpts=PTS-STARTPTS[v0];"
-                f"[1:v]trim=start_frame=1,setpts=PTS-STARTPTS[v1];"
-                f"[v0][v1]concat=n=2:v=1:a=0[outv]"
-            )
+        v2_filter = f"[1:v]{v2_trim_cmd},setpts=PTS-STARTPTS[v1];"
+
+        filter_str = f"{v1_filter}{v2_filter}[v0][v1]concat=n=2:v=1:a=0[outv]"
 
         cmd.extend(
             [
@@ -486,4 +495,3 @@ class WanVideoAutomation:
 
         except Exception as e:
             print(f"❌ Failed to process video: {e}")
-
