@@ -22,10 +22,17 @@ def main():
     parser.add_argument("--end-image", type=str, help="Path to end image (optional)")
 
     parser.add_argument(
-        "--video-time",
+        "--video-splice-time",
         type=float,
         default=None,
-        help="Timestamp (in seconds) to extract frame from and cut video at.",
+        help="Timestamp (in seconds) where the generated video connects to the input video.",
+    )
+
+    parser.add_argument(
+        "--video-target-time",
+        type=float,
+        default=None,
+        help="Timestamp (in seconds) to extract a target frame from input video. (Append: Ends generation here. Prepend: Starts generation here).",
     )
 
     parser.add_argument(
@@ -43,7 +50,6 @@ def main():
         action="store_true",
         help="If set, generates video leading up to the input video. Requires --end-image to be set (acts as start image).",
     )
-
 
     parser.add_argument(
         "--loop",
@@ -92,28 +98,33 @@ def main():
 
     is_video_input = input_path.lower().endswith(".mp4")
 
-
     loop_start_pil = None
     loop_end_pil = None
+
+    video_target_pil = None
 
     if is_video_input:
         print("📹 Detected MP4 input.")
 
         # If prepend is on and no time specified, assume start (0.0).
         # Otherwise default (None) implies end of video.
-        extract_time = args.video_time
+
+        extract_time = args.video_splice_time
         if extract_time is None and args.prepend:
             extract_time = 0.0
 
         my_pil = automation.extract_frame(input_path, timestamp=extract_time)
 
+        if args.video_target_time is not None:
+            video_target_pil = automation.extract_frame(
+                input_path, timestamp=args.video_target_time
+            )
 
         if args.prepend and args.loop:
             print(
                 "🔄 Loop mode (Prepend): Extracting last frame of input video for generation start."
             )
             loop_start_pil = automation.extract_frame(input_path, timestamp=None)
-
 
         if not args.prepend and args.loop:
             print(
@@ -132,18 +143,22 @@ def main():
         my_pil, filename=f"runpod_{upload_filename}"
     )
 
-
     server_loop_start_path = None
     if loop_start_pil:
         server_loop_start_path = automation.upload_to_comfy(
             loop_start_pil, filename=f"runpod_loop_start_{upload_filename}"
         )
 
-
     server_loop_end_path = None
     if loop_end_pil:
         server_loop_end_path = automation.upload_to_comfy(
             loop_end_pil, filename=f"runpod_loop_end_{upload_filename}"
+        )
+
+    server_video_target_path = None
+    if video_target_pil:
+        server_video_target_path = automation.upload_to_comfy(
+            video_target_pil, filename=f"runpod_video_target_{upload_filename}"
         )
 
     server_end_image_path = None
@@ -166,10 +181,13 @@ def main():
 
         # Start Image Priority:
         # 1. Explicit --end-image (acts as start)
-        # 2. --loop (last frame of video)
-        # 3. Fallback (same as end image -> boomerang)
+
+        # 3. --loop (last frame of video)
+        # 4. Fallback (same as end image -> boomerang)
         if server_end_image_path:
             gen_start_path = server_end_image_path
+        elif server_video_target_path:
+            gen_start_path = server_video_target_path
         elif server_loop_start_path:
             gen_start_path = server_loop_start_path
         else:
@@ -184,12 +202,14 @@ def main():
         # Start Image = The frame extracted from video (or input image)
         gen_start_path = server_input_path
 
-
         # 1. Explicit --end-image
-        # 2. --loop (first frame of video)
-        # 3. None
+
+        # 3. --loop (first frame of video)
+        # 4. None
         if server_end_image_path:
             gen_end_path = server_end_image_path
+        elif server_video_target_path:
+            gen_end_path = server_video_target_path
         elif server_loop_end_path:
             gen_end_path = server_loop_end_path
         else:
@@ -210,6 +230,10 @@ def main():
         seed=args.seed,
         end_image_path=gen_end_path,
     )
+
+    # if args.loop and len(video_frames) > 1:
+    #     print("✂️ Loop mode detected: Removing duplicate final frame.")
+    #     video_frames = video_frames[:-1]
 
     output_dir = args.output_dir or os.getenv("OUTPUT_DIR") or "./output"
 
@@ -233,7 +257,12 @@ def main():
             # Handle Concatenation Direction
             if args.prepend:
                 # Order: Generated -> Input Video
-                cut_point = args.video_time if args.video_time is not None else 0.0
+
+                cut_point = (
+                    args.video_splice_time
+                    if args.video_splice_time is not None
+                    else 0.0
+                )
 
                 automation.concatenate_videos(
                     generated_filename,  # Video 1
@@ -248,7 +277,7 @@ def main():
                     input_path,  # Video 1
                     generated_filename,  # Video 2
                     final_filename,
-                    v1_cut=args.video_time,  # Cut input video at end
+                    v1_cut=args.video_splice_time,  # Cut input video at end
                     v2_start=None,  # Default logic (drop 1st frame)
                 )
 
