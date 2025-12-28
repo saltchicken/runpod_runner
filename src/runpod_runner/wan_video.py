@@ -46,7 +46,6 @@ class WanVideoAutomation:
 
         return filename
 
-
     def extract_frame(self, video_path, timestamp=None):
         """
         Extracts a frame from an MP4 video.
@@ -63,7 +62,6 @@ class WanVideoAutomation:
             tmp_filename = tmp_file.name
 
         cmd = ["ffmpeg", "-y"]
-
 
         if timestamp is not None:
             # -ss before -i is fast seeking.
@@ -96,7 +94,6 @@ class WanVideoAutomation:
             if os.path.exists(tmp_filename):
                 os.remove(tmp_filename)
 
-
     def concatenate_videos(
         self, video1_path, video2_path, output_path, trim_duration=None
     ):
@@ -110,18 +107,23 @@ class WanVideoAutomation:
 
         cmd = ["ffmpeg", "-y", "-i", video1_path, "-i", video2_path]
 
-
         if trim_duration is not None:
             # trim=duration=X keeps the first X seconds.
             # setpts=PTS-STARTPTS is crucial when trimming to reset timestamps.
+
             filter_str = (
                 f"[0:v]trim=duration={trim_duration},setpts=PTS-STARTPTS[v0];"
-                f"[1:v]setpts=PTS-STARTPTS[v1];"
+                f"[1:v]trim=start_frame=1,setpts=PTS-STARTPTS[v1];"
                 f"[v0][v1]concat=n=2:v=1:a=0[outv]"
             )
         else:
             # Simple concat if no trim needed
-            filter_str = "[0:v][1:v]concat=n=2:v=1:a=0[outv]"
+
+            filter_str = (
+                f"[0:v]setpts=PTS-STARTPTS[v0];"
+                f"[1:v]trim=start_frame=1,setpts=PTS-STARTPTS[v1];"
+                f"[v0][v1]concat=n=2:v=1:a=0[outv]"
+            )
 
         cmd.extend(
             [
@@ -312,6 +314,7 @@ class WanVideoAutomation:
         lora_low=None,
         length=81,
         seed=None,
+        end_image_path=None,
     ):
         """
         Orchestrates the generation workflow.
@@ -382,9 +385,14 @@ class WanVideoAutomation:
                 start_image_node, _ = self.nodes.LoadImage(config["start_image"])
 
             end_image_node = None
-            if "end_image" in config:
-                print(f"Loading explicit end image: {config['end_image']}")
-                end_image_node, _ = self.nodes.LoadImage(config["end_image"])
+
+            target_end_image_path = end_image_path
+            if target_end_image_path is None and "end_image" in config:
+                target_end_image_path = config["end_image"]
+
+            if target_end_image_path:
+                print(f"Loading end image: {target_end_image_path}")
+                end_image_node, _ = self.nodes.LoadImage(target_end_image_path)
 
             if not final_prompt:
                 print("Error: No prompt provided in JSON or CLI.")
@@ -478,3 +486,4 @@ class WanVideoAutomation:
 
         except Exception as e:
             print(f"❌ Failed to process video: {e}")
+

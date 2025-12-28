@@ -18,8 +18,10 @@ def main():
     parser.add_argument("--lora-high", nargs="*", help="List of high noise LoRAs")
     parser.add_argument("--lora-low", nargs="*", help="List of low noise LoRAs")
     parser.add_argument("--length", type=int, default=81, help="Length for the video")
-    parser.add_argument("--seed", type=int, default=None, help="Length for the video")
-
+    parser.add_argument("--seed", type=int, default=None, help="Seed for the video")
+    parser.add_argument(
+        "--end-image", type=str, help="Path to end image (optional)"
+    )
 
     parser.add_argument(
         "--video-time",
@@ -43,13 +45,10 @@ def main():
     input_path = args.input
     env_input_dir = os.getenv("INPUT_DIR")
 
-    automation = WanVideoAutomation(
-        proxy_url=args.proxy
-    )
+    automation = WanVideoAutomation(proxy_url=args.proxy)
 
     if input_path is None:
         if env_input_dir and os.path.exists(env_input_dir):
-
             valid_extensions = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".mp4"}
             files = [
                 f
@@ -80,7 +79,6 @@ def main():
             f"Input file not found: {args.input or 'random selection'} (checked {input_path})"
         )
 
-
     is_video_input = input_path.lower().endswith(".mp4")
 
     if is_video_input:
@@ -99,6 +97,19 @@ def main():
         my_pil, filename=f"runpod_{upload_filename}"
     )
 
+
+    server_end_image_path = None
+    if args.end_image:
+        if not os.path.exists(args.end_image):
+            raise FileNotFoundError(f"End image not found: {args.end_image}")
+
+        print(f"📤 Uploading end image: {args.end_image}")
+        end_pil = PILImage.open(args.end_image)
+        end_filename = os.path.basename(args.end_image)
+        server_end_image_path = automation.upload_to_comfy(
+            end_pil, filename=f"runpod_end_{end_filename}"
+        )
+
     video_frames = automation.generate_video(
         input_path=server_input_path,
         segment=args.segment,
@@ -107,6 +118,7 @@ def main():
         lora_low=args.lora_low,
         length=args.length,
         seed=args.seed,
+        end_image_path=server_end_image_path,
     )
 
     output_dir = args.output_dir or os.getenv("OUTPUT_DIR") or "./output"
@@ -115,7 +127,6 @@ def main():
         os.makedirs(output_dir, exist_ok=True)
 
         timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-
 
         if is_video_input:
             # If splicing, the "generated" one is temporary/secondary
@@ -128,9 +139,7 @@ def main():
         # Save the AI generated portion
         automation.save_mp4_ffmpeg(video_frames, generated_filename, fps=16)
 
-
         if is_video_input and os.path.exists(generated_filename):
-
             automation.concatenate_videos(
                 input_path,
                 generated_filename,
