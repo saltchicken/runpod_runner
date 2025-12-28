@@ -14,7 +14,8 @@ RUN git clone https://github.com/comfyanonymous/ComfyUI.git
 # 3. Install Python dependencies
 WORKDIR /ComfyUI
 RUN pip install --upgrade pip && \
-    pip install -r requirements.txt
+    pip install -r requirements.txt && \
+    pip install jupyterlab
 
 # 4. Install ComfyUI Manager
 WORKDIR /ComfyUI/custom_nodes
