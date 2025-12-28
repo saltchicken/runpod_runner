@@ -5,6 +5,7 @@ import io
 import requests
 import subprocess
 import shutil
+from PIL import Image
 from comfy_script.runtime import client, load, Workflow
 import comfy_script.runtime.util as util
 from .utils import quiet
@@ -44,6 +45,109 @@ class WanVideoAutomation:
         response.raise_for_status()
 
         return filename
+
+
+    def extract_frame(self, video_path, timestamp=None):
+        """
+        Extracts a frame from an MP4 video.
+        If timestamp is None, extracts the last frame.
+        If timestamp is provided (float/int), extracts the frame at that second.
+        Returns PIL Image.
+        """
+        target_desc = f"{timestamp}s" if timestamp is not None else "end"
+        print(f"🎞️ Extracting frame from: {video_path} at {target_desc}")
+
+        import tempfile
+
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp_file:
+            tmp_filename = tmp_file.name
+
+        cmd = ["ffmpeg", "-y"]
+
+
+        if timestamp is not None:
+            # -ss before -i is fast seeking.
+            cmd.extend(["-ss", str(timestamp), "-i", video_path, "-frames:v", "1"])
+        else:
+            # Old logic for last frame
+            cmd.extend(["-sseof", "-1", "-i", video_path, "-update", "1"])
+
+        cmd.extend(["-q:v", "2", tmp_filename])
+
+        try:
+            with quiet():
+                subprocess.run(
+                    cmd,
+                    check=True,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+
+            with open(tmp_filename, "rb") as f:
+                img_data = f.read()
+
+            img = Image.open(io.BytesIO(img_data)).convert("RGB")
+            return img
+
+        except subprocess.CalledProcessError as e:
+            print(f"❌ Error extracting frame: {e}")
+            raise RuntimeError(f"Failed to extract frame from video at {target_desc}.")
+        finally:
+            if os.path.exists(tmp_filename):
+                os.remove(tmp_filename)
+
+
+    def concatenate_videos(
+        self, video1_path, video2_path, output_path, trim_duration=None
+    ):
+        """
+        Concatenates two video files.
+        If trim_duration is set, video1 is cut at that timestamp before appending video2.
+        """
+        print(
+            f"🔗 Splicing videos:\n  1. {video1_path} (Trim: {trim_duration})\n  2. {video2_path}\n  -> {output_path}"
+        )
+
+        cmd = ["ffmpeg", "-y", "-i", video1_path, "-i", video2_path]
+
+
+        if trim_duration is not None:
+            # trim=duration=X keeps the first X seconds.
+            # setpts=PTS-STARTPTS is crucial when trimming to reset timestamps.
+            filter_str = (
+                f"[0:v]trim=duration={trim_duration},setpts=PTS-STARTPTS[v0];"
+                f"[1:v]setpts=PTS-STARTPTS[v1];"
+                f"[v0][v1]concat=n=2:v=1:a=0[outv]"
+            )
+        else:
+            # Simple concat if no trim needed
+            filter_str = "[0:v][1:v]concat=n=2:v=1:a=0[outv]"
+
+        cmd.extend(
+            [
+                "-filter_complex",
+                filter_str,
+                "-map",
+                "[outv]",
+                "-c:v",
+                "libx264",
+                "-pix_fmt",
+                "yuv420p",
+                "-preset",
+                "slow",
+                "-crf",
+                "18",
+                output_path,
+            ]
+        )
+
+        try:
+            subprocess.run(
+                cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE
+            )
+            print(f"✅ Splicing complete: {output_path}")
+        except subprocess.CalledProcessError as e:
+            print(f"❌ Error splicing videos: {e.stderr.decode()}")
 
     def _setup_models(self):
         clip = self.nodes.CLIPLoader("umt5_xxl_fp16.safetensors", "wan", "default")
@@ -185,7 +289,7 @@ class WanVideoAutomation:
             "disable",
             0,
             steps,
-            cfg_low,
+            cfg_high,
             "euler",
             "simple",
             positive,

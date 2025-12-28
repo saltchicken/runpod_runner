@@ -20,6 +20,14 @@ def main():
     parser.add_argument("--length", type=int, default=81, help="Length for the video")
     parser.add_argument("--seed", type=int, default=None, help="Length for the video")
 
+
+    parser.add_argument(
+        "--video-time",
+        type=float,
+        default=None,
+        help="Timestamp (in seconds) to extract frame from and cut video at.",
+    )
+
     parser.add_argument(
         "--segment",
         type=str,
@@ -35,9 +43,14 @@ def main():
     input_path = args.input
     env_input_dir = os.getenv("INPUT_DIR")
 
+    automation = WanVideoAutomation(
+        proxy_url=args.proxy
+    )
+
     if input_path is None:
         if env_input_dir and os.path.exists(env_input_dir):
-            valid_extensions = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
+
+            valid_extensions = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".mp4"}
             files = [
                 f
                 for f in os.listdir(env_input_dir)
@@ -67,11 +80,21 @@ def main():
             f"Input file not found: {args.input or 'random selection'} (checked {input_path})"
         )
 
-    automation = WanVideoAutomation(proxy_url=args.proxy)
 
-    my_pil = PILImage.open(input_path)
+    is_video_input = input_path.lower().endswith(".mp4")
+
+    if is_video_input:
+        print("📹 Detected MP4 input.")
+
+        my_pil = automation.extract_frame(input_path, timestamp=args.video_time)
+    else:
+        my_pil = PILImage.open(input_path)
 
     upload_filename = os.path.basename(input_path)
+    # If it was a video, we give the uploaded frame a specific name so we know it's a frame
+    if is_video_input:
+        upload_filename = f"{os.path.splitext(upload_filename)[0]}_frame.png"
+
     server_input_path = automation.upload_to_comfy(
         my_pil, filename=f"runpod_{upload_filename}"
     )
@@ -92,9 +115,28 @@ def main():
         os.makedirs(output_dir, exist_ok=True)
 
         timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        output_filename = os.path.join(output_dir, f"{timestamp}.mp4")
 
-        automation.save_mp4_ffmpeg(video_frames, output_filename, fps=16)
+
+        if is_video_input:
+            # If splicing, the "generated" one is temporary/secondary
+            generated_filename = os.path.join(output_dir, f"{timestamp}_generated.mp4")
+            final_filename = os.path.join(output_dir, f"{timestamp}.mp4")
+        else:
+            final_filename = os.path.join(output_dir, f"{timestamp}.mp4")
+            generated_filename = final_filename
+
+        # Save the AI generated portion
+        automation.save_mp4_ffmpeg(video_frames, generated_filename, fps=16)
+
+
+        if is_video_input and os.path.exists(generated_filename):
+
+            automation.concatenate_videos(
+                input_path,
+                generated_filename,
+                final_filename,
+                trim_duration=args.video_time,
+            )
 
 
 if __name__ == "__main__":
