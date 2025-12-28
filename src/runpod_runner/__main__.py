@@ -38,11 +38,17 @@ def main():
         "--output-dir", type=str, default=None, help="Directory to save output"
     )
 
-
     parser.add_argument(
         "--prepend",
         action="store_true",
         help="If set, generates video leading up to the input video. Requires --end-image to be set (acts as start image).",
+    )
+
+
+    parser.add_argument(
+        "--loop",
+        action="store_true",
+        help="If set, creates a seamless loop. Prepend: Starts with LAST frame of input. Append: Ends with FIRST frame of input.",
     )
 
     args = parser.parse_args()
@@ -86,9 +92,12 @@ def main():
 
     is_video_input = input_path.lower().endswith(".mp4")
 
+
+    loop_start_pil = None
+    loop_end_pil = None
+
     if is_video_input:
         print("📹 Detected MP4 input.")
-
 
         # If prepend is on and no time specified, assume start (0.0).
         # Otherwise default (None) implies end of video.
@@ -97,6 +106,20 @@ def main():
             extract_time = 0.0
 
         my_pil = automation.extract_frame(input_path, timestamp=extract_time)
+
+
+        if args.prepend and args.loop:
+            print(
+                "🔄 Loop mode (Prepend): Extracting last frame of input video for generation start."
+            )
+            loop_start_pil = automation.extract_frame(input_path, timestamp=None)
+
+
+        if not args.prepend and args.loop:
+            print(
+                "🔄 Loop mode (Append): Extracting first frame of input video for generation end."
+            )
+            loop_end_pil = automation.extract_frame(input_path, timestamp=0.0)
     else:
         my_pil = PILImage.open(input_path)
 
@@ -108,6 +131,20 @@ def main():
     server_input_path = automation.upload_to_comfy(
         my_pil, filename=f"runpod_{upload_filename}"
     )
+
+
+    server_loop_start_path = None
+    if loop_start_pil:
+        server_loop_start_path = automation.upload_to_comfy(
+            loop_start_pil, filename=f"runpod_loop_start_{upload_filename}"
+        )
+
+
+    server_loop_end_path = None
+    if loop_end_pil:
+        server_loop_end_path = automation.upload_to_comfy(
+            loop_end_pil, filename=f"runpod_loop_end_{upload_filename}"
+        )
 
     server_end_image_path = None
     if args.end_image:
@@ -121,32 +158,47 @@ def main():
             end_pil, filename=f"runpod_end_{end_filename}"
         )
 
-
+    # Determine Generation Inputs based on Direction
     if args.prepend:
-
-        # if not server_end_image_path:
-        #     raise ValueError("❌ --prepend mode requires --end-image to specify the starting frame.")
-
         # In prepend mode:
         # End Image = The frame extracted from the video (server_input_path)
         gen_end_path = server_input_path
 
-        # Start Image = The user provided "end image" OR fallback to extracted frame
+        # Start Image Priority:
+        # 1. Explicit --end-image (acts as start)
+        # 2. --loop (last frame of video)
+        # 3. Fallback (same as end image -> boomerang)
         if server_end_image_path:
             gen_start_path = server_end_image_path
+        elif server_loop_start_path:
+            gen_start_path = server_loop_start_path
         else:
             print(
-                "⚠️ No start image provided for prepend. Using input extracted frame as start (Start=End)."
+                "⚠️ No start image or loop flag provided. Using input extracted frame as start (Start=End)."
             )
             gen_start_path = server_input_path
 
         print("🔄 Prepend Mode: Generating video LEADING UP TO input video frame.")
     else:
-        # Standard Mode:
+        # Standard Mode (Append):
         # Start Image = The frame extracted from video (or input image)
-        # End Image = The user provided end image (optional)
         gen_start_path = server_input_path
-        gen_end_path = server_end_image_path
+
+
+        # 1. Explicit --end-image
+        # 2. --loop (first frame of video)
+        # 3. None
+        if server_end_image_path:
+            gen_end_path = server_end_image_path
+        elif server_loop_end_path:
+            gen_end_path = server_loop_end_path
+        else:
+            gen_end_path = None
+
+        if args.loop and not gen_end_path:
+            print(
+                "⚠️ Loop requested for Append but could not determine loop frame (is input a video?)."
+            )
 
     video_frames = automation.generate_video(
         input_path=gen_start_path,
@@ -178,12 +230,9 @@ def main():
         automation.save_mp4_ffmpeg(video_frames, generated_filename, fps=16)
 
         if is_video_input and os.path.exists(generated_filename):
-
+            # Handle Concatenation Direction
             if args.prepend:
                 # Order: Generated -> Input Video
-                # Generated is whole.
-                # Input Video starts at video-time (or 0).
-
                 cut_point = args.video_time if args.video_time is not None else 0.0
 
                 automation.concatenate_videos(
@@ -195,9 +244,6 @@ def main():
                 )
             else:
                 # Order: Input Video -> Generated
-                # Input Video ends at video-time.
-                # Generated is whole (starts from frame 1 to avoid dupe).
-
                 automation.concatenate_videos(
                     input_path,  # Video 1
                     generated_filename,  # Video 2
