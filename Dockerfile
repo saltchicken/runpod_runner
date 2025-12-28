@@ -20,6 +20,9 @@ RUN pip install --upgrade pip && \
 WORKDIR /ComfyUI/custom_nodes
 
 # 5. Install necessary custom nodes
+
+RUN git clone https://github.com/shootthesound/comfyUI-LongLook.git
+
 RUN git clone https://github.com/Chaoses-Ib/ComfyScript.git && \
     cd ComfyScript && \
     pip install -e ".[default]" && \
