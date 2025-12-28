@@ -220,9 +220,32 @@ def main():
                 "⚠️ Loop requested for Append but could not determine loop frame (is input a video?)."
             )
 
+
+    segment_to_use = args.segment
+    if segment_to_use is None:
+        package_dir = os.path.dirname(os.path.abspath(__file__))
+        segments_dir = os.path.join(package_dir, "segments")
+
+        if os.path.exists(segments_dir):
+            segment_files = [
+                f for f in os.listdir(segments_dir) if f.lower().endswith(".json")
+            ]
+            if segment_files:
+                random_segment = random.choice(segment_files)
+                segment_to_use = os.path.join(segments_dir, random_segment)
+                print(
+                    f"‼️ No segment provided. Selected random segment: {random_segment}"
+                )
+            else:
+                print(
+                    f"‼️ No segment provided and no JSON files found in {segments_dir}."
+                )
+        else:
+            print(f"‼️ Segments directory not found at: {segments_dir}")
+
     video_frames = automation.generate_video(
         input_path=gen_start_path,
-        segment=args.segment,
+        segment=segment_to_use,
         prompt=args.prompt,
         lora_high=args.lora_high,
         lora_low=args.lora_low,
