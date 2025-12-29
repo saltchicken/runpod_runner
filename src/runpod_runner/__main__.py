@@ -1,6 +1,5 @@
 import argparse
 import os
-import sys
 import shlex
 import random
 from datetime import datetime
@@ -11,8 +10,6 @@ from .wan_video import WanVideoAutomation
 
 def main():
     load_dotenv()
-
-    print(f"🚀 Executed Command: {' '.join(shlex.quote(arg) for arg in sys.argv)}")
 
     parser = argparse.ArgumentParser(description="Wan2.2 Video Generation Script")
     parser.add_argument("--proxy", type=str, required=True, help="RunPod proxy URL")
@@ -236,11 +233,67 @@ def main():
             if segment_files:
                 random_segment = random.choice(segment_files)
                 segment_to_use = os.path.join(segments_dir, random_segment)
-                print(f"No segment provided. Selected random segment: {random_segment}")
+                print(
+                    f"‼️ No segment provided. Selected random segment: {random_segment}"
+                )
             else:
-                print(f"No segment provided and no JSON files found in {segments_dir}.")
+                print(
+                    f"‼️ No segment provided and no JSON files found in {segments_dir}."
+                )
         else:
-            print(f"Segments directory not found at: {segments_dir}")
+            print(f"‼️ Segments directory not found at: {segments_dir}")
+
+
+    final_seed = args.seed
+    if final_seed is None:
+        final_seed = random.randint(0, 0xFFFFFFFFFFFFFF)
+
+
+    repro_cmd = ["python", "-m", "runpod_runner"]
+    repro_cmd.extend(["--proxy", args.proxy])
+
+    if input_path:
+        repro_cmd.extend(["--input", input_path])
+
+    if args.prompt:
+        repro_cmd.extend(["--prompt", args.prompt])
+
+    if args.lora_high:
+        repro_cmd.append("--lora-high")
+        repro_cmd.extend(args.lora_high)
+
+    if args.lora_low:
+        repro_cmd.append("--lora-low")
+        repro_cmd.extend(args.lora_low)
+
+    repro_cmd.extend(["--length", str(args.length)])
+
+    repro_cmd.extend(["--seed", str(final_seed)])
+
+    if args.end_image:
+        repro_cmd.extend(["--end-image", args.end_image])
+
+    if args.video_splice_time is not None:
+        repro_cmd.extend(["--video-splice-time", str(args.video_splice_time)])
+
+    if args.video_target_time is not None:
+        repro_cmd.extend(["--video-target-time", str(args.video_target_time)])
+
+    if segment_to_use:
+        repro_cmd.extend(["--segment", segment_to_use])
+
+    if args.output_dir:
+        repro_cmd.extend(["--output-dir", args.output_dir])
+
+    if args.prepend:
+        repro_cmd.append("--prepend")
+
+    if args.loop:
+        repro_cmd.append("--loop")
+
+    print(
+        f"🚀 Reproduction Command: {' '.join(shlex.quote(str(arg)) for arg in repro_cmd)}"
+    )
 
     video_frames = automation.generate_video(
         input_path=gen_start_path,
@@ -249,7 +302,7 @@ def main():
         lora_high=args.lora_high,
         lora_low=args.lora_low,
         length=args.length,
-        seed=args.seed,
+        seed=final_seed,
         end_image_path=gen_end_path,
     )
 
@@ -306,4 +359,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
