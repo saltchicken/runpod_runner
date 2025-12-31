@@ -2,6 +2,7 @@ import argparse
 import os
 import shlex
 import random
+import time
 from datetime import datetime
 from PIL import Image as PILImage
 from dotenv import load_dotenv
@@ -9,6 +10,7 @@ from .wan_video import WanVideoAutomation
 
 
 def main():
+    start_time_total = time.time()
     load_dotenv()
 
     parser = argparse.ArgumentParser(description="Wan2.2 Video Generation Script")
@@ -105,7 +107,6 @@ def main():
 
     is_video_input = input_path.lower().endswith(".mp4")
 
-
     # We upload the video file directly for use in the node graph.
     if args.svi:
         if not is_video_input:
@@ -115,8 +116,6 @@ def main():
         print(
             "📹 SVI Mode Detected: Uploading full video for Video-to-Video processing."
         )
-
-
 
         trim_end_time = args.video_splice_time
 
@@ -339,6 +338,8 @@ def main():
         svi=args.svi,
     )
 
+    print("‼️ Server side computation done. Starting local processing.")  # Added change
+
     output_dir = args.output_dir or os.getenv("OUTPUT_DIR") or "./output"
 
     if output_dir:
@@ -356,7 +357,6 @@ def main():
 
         # Save the AI generated portion
         automation.save_mp4_ffmpeg(video_frames, generated_filename, fps=16)
-
 
         if args.svi and os.path.exists(generated_filename):
             print(f"✨ SVI Video Saved to: {generated_filename}")
@@ -388,6 +388,8 @@ def main():
                     v1_cut=args.video_splice_time,  # Cut input video at end
                     v2_start=None,  # Default logic (drop 1st frame)
                 )
+
+    print(f"‼️ Total Script Execution Time: {time.time() - start_time_total:.2f}s")
 
 
 if __name__ == "__main__":

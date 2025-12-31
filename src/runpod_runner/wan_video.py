@@ -31,6 +31,7 @@ class WanVideoAutomation:
         Uploads a PIL image to the ComfyUI server's input directory via HTTP.
         Returns: The filename string expected by LoadImage.
         """
+        t0 = time.time()
         byte_stream = io.BytesIO()
         pil_image.save(byte_stream, format="PNG")
         byte_stream.seek(0)
@@ -46,16 +47,16 @@ class WanVideoAutomation:
         response = requests.post(target_url, files=files, data=data)
         response.raise_for_status()
 
+        print(f"‼️ Image upload took: {time.time() - t0:.2f}s")
         return filename
-
 
     def _compress_video(self, video_path):
         """
         Compresses a video file locally using ffmpeg to reduce file size.
         """
+        t0 = time.time()
         with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp:
             output_path = tmp.name
-
 
         cmd = [
             "ffmpeg",
@@ -86,14 +87,15 @@ class WanVideoAutomation:
                 os.remove(output_path)
             raise e
 
+        print(f"‼️ Video compression took: {time.time() - t0:.2f}s")
         return output_path
-
 
     def _trim_video(self, video_path, start_time=None, end_time=None):
         """
         Trims a video file locally using ffmpeg.
         Returns path to the trimmed temporary file.
         """
+        t0 = time.time()
         with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp:
             output_path = tmp.name
 
@@ -134,8 +136,8 @@ class WanVideoAutomation:
                 os.remove(output_path)
             raise e
 
+        print(f"‼️ Video trimming took: {time.time() - t0:.2f}s")
         return output_path
-
 
     def upload_video(self, local_path, filename=None, trim_start=None, trim_end=None):
         """
@@ -145,7 +147,6 @@ class WanVideoAutomation:
         """
         if filename is None:
             filename = os.path.basename(local_path)
-
 
         temp_trim_path = None
         upload_source_path = local_path
@@ -166,6 +167,8 @@ class WanVideoAutomation:
 
         print(f"📤 Uploading video: {upload_source_path} as {filename}")
 
+        t0 = time.time()
+
         def do_upload(path, name):
             with open(path, "rb") as f:
                 files = {"image": (name, f, "video/mp4")}
@@ -184,9 +187,11 @@ class WanVideoAutomation:
                 compressed_path = self._compress_video(upload_source_path)
                 try:
                     print(f"📤 Retrying upload with compressed version...")
+                    t_retry = time.time()
                     response = do_upload(compressed_path, filename)
                     response.raise_for_status()
                     print("✅ Compressed upload successful.")
+                    t0 = t_retry
                 finally:
                     # Cleanup compressed temp file
                     if os.path.exists(compressed_path):
@@ -194,10 +199,10 @@ class WanVideoAutomation:
             else:
                 raise e
         finally:
-
             if temp_trim_path and os.path.exists(temp_trim_path):
                 os.remove(temp_trim_path)
 
+        print(f"‼️ Video upload took: {time.time() - t0:.2f}s")
         return filename
 
     def extract_frame(self, video_path, timestamp=None):
@@ -207,6 +212,7 @@ class WanVideoAutomation:
         If timestamp is provided (float/int), extracts the frame at that second.
         Returns PIL Image.
         """
+        t0 = time.time()
         target_desc = f"{timestamp}s" if timestamp is not None else "end"
         print(f"🎞️ Extracting frame from: {video_path} at {target_desc}")
 
@@ -237,6 +243,7 @@ class WanVideoAutomation:
                 img_data = f.read()
 
             img = Image.open(io.BytesIO(img_data)).convert("RGB")
+            print(f"‼️ Frame extraction took: {time.time() - t0:.2f}s")
             return img
 
         except subprocess.CalledProcessError as e:
@@ -254,6 +261,7 @@ class WanVideoAutomation:
         v1_cut: If set, Video 1 is trimmed to this duration (from start).
         v2_start: If set, Video 2 starts from this timestamp.
         """
+        t0 = time.time()
         print(
             f"🔗 Splicing videos:\n  1. {video1_path} (Cut At: {v1_cut})\n  2. {video2_path} (Start At: {v2_start})\n  -> {output_path}"
         )
@@ -310,6 +318,8 @@ class WanVideoAutomation:
         except subprocess.CalledProcessError as e:
             print(f"❌ Error splicing videos: {e.stderr.decode()}")
 
+        print(f"‼️ Video Concatenation took: {time.time() - t0:.2f}s")
+
     def _setup_models(self):
         clip = self.nodes.CLIPLoader("umt5_xxl_fp16.safetensors", "wan", "default")
         vae = self.nodes.VAELoader("wan_2.1_vae.safetensors")
@@ -341,7 +351,6 @@ class WanVideoAutomation:
         if isinstance(loras, str):
             loras = [loras]
 
-
         current_model = model
 
         if not loras:
@@ -362,7 +371,6 @@ class WanVideoAutomation:
             return name, strength
 
         print(f"  - Loading {len(loras)} LoRA(s)...")
-
 
         for i, lora_entry in enumerate(loras):
             name, strength = parse_lora(lora_entry)
@@ -477,7 +485,6 @@ class WanVideoAutomation:
         segment1 = self.nodes.VAEDecode(latent, vae)
         return segment1
 
-
     def _wan_svi_video_to_video(
         self,
         video_filename,
@@ -493,7 +500,6 @@ class WanVideoAutomation:
         """
         if seed is None:
             seed = random.randint(0, 0xFFFFFFFFFFFFFF)
-
 
         if not prompt:
             print("⚠️ Warning: No prompt provided for SVI workflow. Using empty string.")
@@ -639,14 +645,12 @@ class WanVideoAutomation:
         # 7. Decode and Merge
         image = self.nodes.VAEDecode(latent3, vae)
 
-
         # Snippet: _, image = FirstNFramesSelector(image, 5)
         # This effectively discards the first 5 frames from the generated output
         print(
             "✂️ Applying FirstNFramesSelector (Dropping first 5 frames from generation)..."
         )
         _, image = self.nodes.FirstNFramesSelector(image, 5)
-
 
         # Snippet: VideoMerge(images, image, None, None, None)
         image2 = self.nodes.VideoMerge(images, image, None, None, None)
@@ -670,7 +674,6 @@ class WanVideoAutomation:
         """
 
         with Workflow() as wf:
-
             config = {}
 
             if segment:
@@ -717,7 +720,6 @@ class WanVideoAutomation:
                     print(f"Error parsing JSON: {e}")
                     exit(1)
 
-
             # Use CLI arg if it is not None; otherwise fall back to config.
             final_prompt = prompt if prompt is not None else config.get("prompt")
             final_lora_high = (
@@ -729,7 +731,6 @@ class WanVideoAutomation:
 
             final_length = length
             final_seed = seed
-
 
             if svi:
                 if final_prompt is None:
@@ -792,6 +793,7 @@ class WanVideoAutomation:
                 )
 
             print("\n--- Retrieving Frames from Server ---")
+            t0 = time.time()
             all_video_frames = []
             max_retries = 5
             for attempt in range(max_retries):
@@ -799,6 +801,9 @@ class WanVideoAutomation:
                     all_video_frames = util.get_images(output_node)
                     # Simple check to ensure we actually got data
                     if all_video_frames:
+                        print(
+                            "‼️ Server computation finished. Data retrieved."
+                        )  # Added change
                         break
                 except Exception as e:
                     print(
@@ -813,6 +818,7 @@ class WanVideoAutomation:
                         print("❌ Failed to retrieve images after multiple attempts.")
                         raise e
 
+            print(f"‼️ Server Generation & Retrieval took: {time.time() - t0:.2f}s")
             print(f"Done! {len(all_video_frames)} frames returned.")
             return all_video_frames
 
@@ -820,6 +826,7 @@ class WanVideoAutomation:
         """
         Pipes the PIL frames directly to ffmpeg to create an MP4.
         """
+        t0 = time.time()
         if not frames:
             print("No frames to save.")
             return
@@ -884,3 +891,5 @@ class WanVideoAutomation:
 
         except Exception as e:
             print(f"❌ Failed to process video: {e}")
+
+        print(f"‼️ Video Saving/Encoding took: {time.time() - t0:.2f}s")
