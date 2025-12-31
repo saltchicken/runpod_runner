@@ -190,7 +190,7 @@ class WanVideoAutomation:
         if isinstance(loras, str):
             loras = [loras]
 
-        # ‼️ Initialize with the base model to allow chaining
+
         current_model = model
 
         if not loras:
@@ -212,7 +212,7 @@ class WanVideoAutomation:
 
         print(f"  - Loading {len(loras)} LoRA(s)...")
 
-        # ‼️ Loop through ALL provided LoRAs (previously stopped after 2)
+
         for i, lora_entry in enumerate(loras):
             name, strength = parse_lora(lora_entry)
 
@@ -222,7 +222,7 @@ class WanVideoAutomation:
             print(
                 f"    [{i + 1}/{len(loras)}] + Loading LoRA: {name} (Strength: {strength})"
             )
-            # ‼️ Chain the model loader
+
             current_model = self.nodes.LoraLoaderModelOnly(
                 current_model, name, strength
             )
@@ -391,7 +391,9 @@ class WanVideoAutomation:
                     print(f"Error parsing JSON: {e}")
                     exit(1)
 
-            final_prompt = config.get("prompt", prompt)
+
+            final_prompt = prompt if prompt is not None else config.get("prompt")
+
             final_lora_high = config.get("lora_high", lora_high)
             final_lora_low = config.get("lora_low", lora_low)
             final_length = length
