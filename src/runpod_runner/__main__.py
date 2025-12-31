@@ -117,7 +117,10 @@ def main():
         )
 
 
-        server_input_path = automation.upload_video(input_path)
+
+        trim_end_time = args.video_splice_time
+
+        server_input_path = automation.upload_video(input_path, trim_end=trim_end_time)
 
         # SVI mode generally doesn't use start/end images in the same way (it uses video components)
         # We can disable gen_start_path / gen_end_path logic or map them if needed.
@@ -335,10 +338,6 @@ def main():
         end_image_path=gen_end_path,
         svi=args.svi,
     )
-
-    # if args.loop and len(video_frames) > 1:
-    #     print("✂️ Loop mode detected: Removing duplicate final frame.")
-    #     video_frames = video_frames[:-1]
 
     output_dir = args.output_dir or os.getenv("OUTPUT_DIR") or "./output"
 

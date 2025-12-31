@@ -89,20 +89,82 @@ class WanVideoAutomation:
         return output_path
 
 
-    def upload_video(self, local_path, filename=None):
+    def _trim_video(self, video_path, start_time=None, end_time=None):
+        """
+        Trims a video file locally using ffmpeg.
+        Returns path to the trimmed temporary file.
+        """
+        with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp:
+            output_path = tmp.name
+
+        cmd = ["ffmpeg", "-y"]
+
+        # Fast seeking for start time
+        if start_time is not None:
+            cmd.extend(["-ss", str(start_time)])
+
+        cmd.extend(["-i", video_path])
+
+        if end_time is not None:
+            cmd.extend(["-to", str(end_time)])
+
+        # Re-encode specifically to ensure valid keyframes at cut points
+        cmd.extend(
+            [
+                "-c:v",
+                "libx264",
+                "-c:a",
+                "aac",
+                "-strict",
+                "experimental",
+                output_path,
+            ]
+        )
+
+        print(
+            f"✂️ Trimming video locally: {output_path} (Start: {start_time}, End: {end_time})"
+        )
+        try:
+            subprocess.run(
+                cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE
+            )
+        except subprocess.CalledProcessError as e:
+            print(f"❌ Trimming failed: {e.stderr.decode()}")
+            if os.path.exists(output_path):
+                os.remove(output_path)
+            raise e
+
+        return output_path
+
+
+    def upload_video(self, local_path, filename=None, trim_start=None, trim_end=None):
         """
         Uploads a video file to the ComfyUI server.
         Handles 413 errors by attempting compression.
+        Supports optional trimming before upload.
         """
         if filename is None:
             filename = os.path.basename(local_path)
+
+
+        temp_trim_path = None
+        upload_source_path = local_path
+
+        if trim_start is not None or trim_end is not None:
+            # Check if trimming is actually needed (e.g. not just 0.0 start)
+            if not (trim_start == 0.0 and trim_end is None):
+                try:
+                    temp_trim_path = self._trim_video(local_path, trim_start, trim_end)
+                    upload_source_path = temp_trim_path
+                except Exception as e:
+                    print(f"⚠️ Trimming failed, proceeding with original: {e}")
 
         base_url = self.base_url
         if not base_url.endswith("/"):
             base_url += "/"
         target_url = f"{base_url}upload/image"
 
-        print(f"📤 Uploading video: {local_path} as {filename}")
+        print(f"📤 Uploading video: {upload_source_path} as {filename}")
 
         def do_upload(path, name):
             with open(path, "rb") as f:
@@ -111,25 +173,30 @@ class WanVideoAutomation:
                 return requests.post(target_url, files=files, data=data)
 
         try:
-            response = do_upload(local_path, filename)
+            response = do_upload(upload_source_path, filename)
             response.raise_for_status()
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 413:
                 print("⚠️ Upload failed: 413 Request Entity Too Large.")
                 print("🔄 Attempting to compress video locally before retrying...")
 
-                compressed_path = self._compress_video(local_path)
+                # Compress the source (which might already be the trimmed version)
+                compressed_path = self._compress_video(upload_source_path)
                 try:
                     print(f"📤 Retrying upload with compressed version...")
                     response = do_upload(compressed_path, filename)
                     response.raise_for_status()
                     print("✅ Compressed upload successful.")
                 finally:
-                    # Cleanup temp file
+                    # Cleanup compressed temp file
                     if os.path.exists(compressed_path):
                         os.remove(compressed_path)
             else:
                 raise e
+        finally:
+
+            if temp_trim_path and os.path.exists(temp_trim_path):
+                os.remove(temp_trim_path)
 
         return filename
 
@@ -571,6 +638,14 @@ class WanVideoAutomation:
 
         # 7. Decode and Merge
         image = self.nodes.VAEDecode(latent3, vae)
+
+
+        # Snippet: _, image = FirstNFramesSelector(image, 5)
+        # This effectively discards the first 5 frames from the generated output
+        print(
+            "✂️ Applying FirstNFramesSelector (Dropping first 5 frames from generation)..."
+        )
+        _, image = self.nodes.FirstNFramesSelector(image, 5)
 
 
         # Snippet: VideoMerge(images, image, None, None, None)
