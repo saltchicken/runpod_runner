@@ -6,6 +6,7 @@ import requests
 import subprocess
 import shutil
 from PIL import Image
+import time
 from comfy_script.runtime import client, load, Workflow
 import comfy_script.runtime.util as util
 from .utils import quiet
@@ -94,7 +95,6 @@ class WanVideoAutomation:
             if os.path.exists(tmp_filename):
                 os.remove(tmp_filename)
 
-
     def concatenate_videos(
         self, video1_path, video2_path, output_path, v1_cut=None, v2_start=None
     ):
@@ -108,7 +108,6 @@ class WanVideoAutomation:
         )
 
         cmd = ["ffmpeg", "-y", "-i", video1_path, "-i", video2_path]
-
 
         # Video 1 Filter
         v1_filter = "[0:v]setpts=PTS-STARTPTS[v0];"
@@ -191,33 +190,45 @@ class WanVideoAutomation:
         if isinstance(loras, str):
             loras = [loras]
 
+        # ‼️ Initialize with the base model to allow chaining
+        current_model = model
+
         if not loras:
-            return self.nodes.ModelSamplingSD3(model, 5)
+            print("  - No additional LoRAs to load.")
+            return self.nodes.ModelSamplingSD3(current_model, 5)
 
         def parse_lora(lora_str):
+            lora_str = str(lora_str).strip()
             name = lora_str
             strength = 1.0
             if ":" in lora_str:
                 parts = lora_str.rsplit(":", 1)
                 try:
                     strength = float(parts[1])
-                    name = parts[0]
+                    name = parts[0].strip()
                 except ValueError:
                     pass
             return name, strength
 
-        name, strength = parse_lora(loras[0])
-        lora_model = self.nodes.LoraLoaderModelOnly(model, name, strength)
+        print(f"  - Loading {len(loras)} LoRA(s)...")
 
-        if len(loras) >= 2:
-            name, strength = parse_lora(loras[1])
-            lora_model = self.nodes.LoraLoaderModelOnly(lora_model, name, strength)
+        # ‼️ Loop through ALL provided LoRAs (previously stopped after 2)
+        for i, lora_entry in enumerate(loras):
+            name, strength = parse_lora(lora_entry)
 
-        if len(loras) > 2:
-            print("Note: Only first two LoRAs loaded.")
+            if not name:
+                continue
 
-        lora_model = self.nodes.ModelSamplingSD3(lora_model, 5)
-        return lora_model
+            print(
+                f"    [{i + 1}/{len(loras)}] + Loading LoRA: {name} (Strength: {strength})"
+            )
+            # ‼️ Chain the model loader
+            current_model = self.nodes.LoraLoaderModelOnly(
+                current_model, name, strength
+            )
+
+        current_model = self.nodes.ModelSamplingSD3(current_model, 5)
+        return current_model
 
     def _wan_frame_to_video(
         self,
@@ -422,7 +433,26 @@ class WanVideoAutomation:
             )
 
             print("\n--- Retrieving Frames from Server ---")
-            all_video_frames = util.get_images(video_batch)
+            all_video_frames = []
+            max_retries = 5
+            for attempt in range(max_retries):
+                try:
+                    all_video_frames = util.get_images(video_batch)
+                    # Simple check to ensure we actually got data
+                    if all_video_frames:
+                        break
+                except Exception as e:
+                    print(
+                        f"⚠️ Retrieval failed (Attempt {attempt + 1}/{max_retries}): {e}"
+                    )
+                    # Catch the specific 'unexpected mimetype' error or 404s
+                    if attempt < max_retries - 1:
+                        sleep_time = 3 * (attempt + 1)
+                        print(f"⏳ Waiting {sleep_time}s for proxy to sync...")
+                        time.sleep(sleep_time)
+                    else:
+                        print("❌ Failed to retrieve images after multiple attempts.")
+                        raise e
 
             print(f"Done! {len(all_video_frames)} frames returned.")
             return all_video_frames
