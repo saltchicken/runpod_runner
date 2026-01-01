@@ -17,10 +17,11 @@ class WanVideoAutomation:
         """
         Initializes the automation client and connects to the ComfyUI instance.
         """
-        print(f"Connecting to ComfyUI at {proxy_url}...")
-        load(proxy_url)
+        # print(f"Connecting to ComfyUI at {proxy_url}...")
+        with quiet():
+            load(proxy_url)
 
-        import comfy_script.runtime.nodes as nodes
+            import comfy_script.runtime.nodes as nodes
 
         self.nodes = nodes
         self.base_url = client.client.base_url
@@ -95,43 +96,93 @@ class WanVideoAutomation:
             if os.path.exists(tmp_filename):
                 os.remove(tmp_filename)
 
+    def _get_fps(self, video_path):
+        """
+        Returns the framerate of the video as a float.
+        """
+        cmd = [
+            "ffprobe",
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=r_frame_rate",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
+            video_path,
+        ]
+        try:
+            output = subprocess.check_output(cmd).decode().strip()
+            if "/" in output:
+                num, den = map(int, output.split("/"))
+                return num / den if den != 0 else 0
+            return float(output)
+        except Exception as e:
+            print(f"⚠️ Could not detect FPS for {video_path}: {e}")
+            return None
+
     def concatenate_videos(
-        self, video1_path, video2_path, output_path, v1_cut=None, v2_start=None
+        self,
+        video1_path,
+        video2_path,
+        output_path,
+        v1_cut=None,
+        v2_start=None,
+        metadata=None,
     ):
         """
         Concatenates two video files.
         v1_cut: If set, Video 1 is trimmed to this duration (from start).
         v2_start: If set, Video 2 starts from this timestamp.
+        metadata: Optional dictionary of generation data to embed in the output file.
         """
         print(
             f"🔗 Splicing videos:\n  1. {video1_path} (Cut At: {v1_cut})\n  2. {video2_path} (Start At: {v2_start})\n  -> {output_path}"
         )
 
+        v1_fps = self._get_fps(video1_path)
+        v2_fps = self._get_fps(video2_path)
+        print(f"  - v1 FPS: {v1_fps} | v2 FPS: {v2_fps}")
+
         cmd = ["ffmpeg", "-y", "-i", video1_path, "-i", video2_path]
 
-        # Video 1 Filter
-        v1_filter = "[0:v]setpts=PTS-STARTPTS[v0];"
+        if metadata:
+            # indent=None creates a compact JSON string
+            meta_str = json.dumps(metadata, indent=None)
+            cmd.extend(["-metadata", f"comment={meta_str}"])
+            cmd.extend(["-metadata", f"description={meta_str}"])
+
+        # --- Video 1 Filter Construction ---
+        v1_filter_parts = ["[0:v]"]
+
+        if v1_fps is None or abs(v1_fps - 16) > 0.01:
+            v1_filter_parts.append("fps=16,")
+
         if v1_cut is not None:
-            v1_filter = f"[0:v]trim=duration={v1_cut},setpts=PTS-STARTPTS[v0];"
+            v1_filter_parts.append(f"trim=duration={v1_cut},")
 
-        # Video 2 Filter
-        # We always attempt to drop 1 frame of overlap for smoothness if just appending.
-        # If v2_start is provided, we seek to that point first.
+        v1_filter_parts.append("setpts=PTS-STARTPTS[v0];")
+        v1_filter_str = "".join(v1_filter_parts)
 
+        # --- Video 2 Filter Construction ---
         v2_trim_cmd = ""
         if v2_start is not None:
-            # Trim from start point, then drop 1 frame to avoid duplication of the connection frame
-            # chaining trims: first trim gets the segment, second trim removes 1st frame of that segment
             v2_trim_cmd = (
                 f"trim=start={v2_start},setpts=PTS-STARTPTS,trim=start_frame=1"
             )
         else:
-            # Standard: just drop first frame
             v2_trim_cmd = "trim=start_frame=1"
 
-        v2_filter = f"[1:v]{v2_trim_cmd},setpts=PTS-STARTPTS[v1];"
+        v2_filter_parts = ["[1:v]"]
 
-        filter_str = f"{v1_filter}{v2_filter}[v0][v1]concat=n=2:v=1:a=0[outv]"
+        if v2_fps is None or abs(v2_fps - 16) > 0.01:
+            v2_filter_parts.append("fps=16,")
+
+        v2_filter_parts.append(f"{v2_trim_cmd},setpts=PTS-STARTPTS[v1];")
+        v2_filter_str = "".join(v2_filter_parts)
+
+        filter_str = f"{v1_filter_str}{v2_filter_str}[v0][v1]concat=n=2:v=1:a=0[outv]"
 
         cmd.extend(
             [
@@ -190,7 +241,6 @@ class WanVideoAutomation:
         if isinstance(loras, str):
             loras = [loras]
 
-
         current_model = model
 
         if not loras:
@@ -211,7 +261,6 @@ class WanVideoAutomation:
             return name, strength
 
         print(f"  - Loading {len(loras)} LoRA(s)...")
-
 
         for i, lora_entry in enumerate(loras):
             name, strength = parse_lora(lora_entry)
@@ -391,13 +440,20 @@ class WanVideoAutomation:
                     print(f"Error parsing JSON: {e}")
                     exit(1)
 
-
             final_prompt = prompt if prompt is not None else config.get("prompt")
 
             final_lora_high = config.get("lora_high", lora_high)
             final_lora_low = config.get("lora_low", lora_low)
             final_length = length
             final_seed = seed
+
+            used_params = {
+                "prompt": final_prompt,
+                "lora_high": final_lora_high,
+                "lora_low": final_lora_low,
+                "length": final_length,
+                "seed": final_seed,
+            }
 
             start_image_node = input_image
             if "start_image" in config:
@@ -418,7 +474,8 @@ class WanVideoAutomation:
 
             if not final_prompt:
                 print("Error: No prompt provided in JSON or CLI.")
-                return []
+
+                return [], {}
 
             video_batch = self._wan_frame_to_video(
                 wan_high_noise_model,
@@ -457,9 +514,10 @@ class WanVideoAutomation:
                         raise e
 
             print(f"Done! {len(all_video_frames)} frames returned.")
-            return all_video_frames
 
-    def save_mp4_ffmpeg(self, frames, output_path, fps=16):
+            return all_video_frames, used_params
+
+    def save_mp4_ffmpeg(self, frames, output_path, fps=16, metadata=None):
         """
         Pipes the PIL frames directly to ffmpeg to create an MP4.
         """
@@ -498,8 +556,16 @@ class WanVideoAutomation:
             "0",
             "-preset",
             "veryslow",
-            output_path,
         ]
+
+        if metadata:
+            # indent=None creates a compact JSON string
+            meta_str = json.dumps(metadata, indent=None)
+            cmd.extend(["-metadata", f"comment={meta_str}"])
+            # Some players show 'description' more prominently
+            cmd.extend(["-metadata", f"description={meta_str}"])
+
+        cmd.append(output_path)
 
         try:
             process = subprocess.Popen(
@@ -527,3 +593,4 @@ class WanVideoAutomation:
 
         except Exception as e:
             print(f"❌ Failed to process video: {e}")
+

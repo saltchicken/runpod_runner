@@ -15,6 +15,12 @@ def main():
     parser.add_argument("--proxy", type=str, required=True, help="RunPod proxy URL")
 
     parser.add_argument("--input", type=str, required=False, help="Local path to image")
+    parser.add_argument(
+        "--input-dir",
+        type=str,
+        required=False,
+        help="Directory to pull random input from",
+    )
     parser.add_argument("--prompt", type=str, help="Text prompt (optional if in JSON)")
     parser.add_argument("--lora-high", nargs="*", help="List of high noise LoRAs")
     parser.add_argument("--lora-low", nargs="*", help="List of low noise LoRAs")
@@ -61,7 +67,8 @@ def main():
     args = parser.parse_args()
 
     input_path = args.input
-    env_input_dir = os.getenv("INPUT_DIR")
+
+    env_input_dir = args.input_dir if args.input_dir else os.getenv("INPUT_DIR")
 
     automation = WanVideoAutomation(proxy_url=args.proxy)
 
@@ -83,7 +90,7 @@ def main():
                 )
         else:
             raise ValueError(
-                "Input not provided and INPUT_DIR environment variable is not set or valid."
+                "Input not provided and neither --input-dir nor INPUT_DIR environment variable is set or valid."
             )
 
     if not os.path.exists(input_path) and env_input_dir:
@@ -243,11 +250,9 @@ def main():
         else:
             print(f"‼️ Segments directory not found at: {segments_dir}")
 
-
     final_seed = args.seed
     if final_seed is None:
         final_seed = random.randint(0, 0xFFFFFFFFFFFFFF)
-
 
     repro_cmd = ["python", "-m", "runpod_runner"]
     repro_cmd.extend(["--proxy", args.proxy])
@@ -295,7 +300,8 @@ def main():
         f"🚀 Reproduction Command: {' '.join(shlex.quote(str(arg)) for arg in repro_cmd)}"
     )
 
-    video_frames = automation.generate_video(
+
+    video_frames, used_params = automation.generate_video(
         input_path=gen_start_path,
         segment=segment_to_use,
         prompt=args.prompt,
@@ -317,6 +323,18 @@ def main():
 
         timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
 
+
+        generation_metadata = {
+            "prompt": used_params.get("prompt"),
+            "seed": used_params.get("seed"),
+            "lora_high": used_params.get("lora_high"),
+            "lora_low": used_params.get("lora_low"),
+            "segment": segment_to_use,
+            "length": used_params.get("length"),
+            "generated_at": datetime.now().isoformat(),
+            "application": "RunPod-Wan2.1-Runner",
+        }
+
         if is_video_input:
             # If splicing, the "generated" one is temporary/secondary
             generated_filename = os.path.join(output_dir, f"{timestamp}_generated.mp4")
@@ -326,7 +344,13 @@ def main():
             generated_filename = final_filename
 
         # Save the AI generated portion
-        automation.save_mp4_ffmpeg(video_frames, generated_filename, fps=16)
+
+        automation.save_mp4_ffmpeg(
+            video_frames,
+            generated_filename,
+            fps=16,
+            metadata=generation_metadata,
+        )
 
         if is_video_input and os.path.exists(generated_filename):
             # Handle Concatenation Direction
@@ -345,15 +369,18 @@ def main():
                     final_filename,
                     v1_cut=None,  # Don't cut generated
                     v2_start=cut_point,  # Start input video at cut point
+                    metadata=generation_metadata,
                 )
             else:
                 # Order: Input Video -> Generated
+
                 automation.concatenate_videos(
                     input_path,  # Video 1
                     generated_filename,  # Video 2
                     final_filename,
                     v1_cut=args.video_splice_time,  # Cut input video at end
                     v2_start=None,  # Default logic (drop 1st frame)
+                    metadata=generation_metadata,
                 )
 
 
