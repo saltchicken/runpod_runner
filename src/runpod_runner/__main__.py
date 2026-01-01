@@ -300,7 +300,6 @@ def main():
         f"🚀 Reproduction Command: {' '.join(shlex.quote(str(arg)) for arg in repro_cmd)}"
     )
 
-
     video_frames, used_params = automation.generate_video(
         input_path=gen_start_path,
         segment=segment_to_use,
@@ -322,7 +321,6 @@ def main():
         os.makedirs(output_dir, exist_ok=True)
 
         timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-
 
         generation_metadata = {
             "prompt": used_params.get("prompt"),
@@ -381,6 +379,17 @@ def main():
                     v1_cut=args.video_splice_time,  # Cut input video at end
                     v2_start=None,  # Default logic (drop 1st frame)
                     metadata=generation_metadata,
+                )
+
+            if os.path.exists(final_filename):
+                print(f"🗑️ Deleting temporary generated clip: {generated_filename}")
+                try:
+                    os.remove(generated_filename)
+                except OSError as e:
+                    print(f"⚠️ Failed to delete temporary file: {e}")
+            else:
+                print(
+                    f"⚠️ Final spliced video not found. Keeping generated clip at {generated_filename}"
                 )
 
 
